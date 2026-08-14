@@ -1,0 +1,26 @@
+{
+  "home": {
+    "path": "/",
+    "output": "docs/images/example-home.png",
+    "fullPage": false,
+    "waitMs": 500,
+    "maskColor": "#1f2937",
+    "prepare": [],
+    "masks": [],
+    "annotations": [
+      {
+        "locator": {
+          "type": "role",
+          "role": "heading",
+          "name": "Example Domain"
+        },
+        "match": "one",
+        "required": true,
+        "label": "1",
+        "color": "#dc2626",
+        "margin": 6,
+        "strokeWidth": 4
+      }
+    ]
+  }
+}

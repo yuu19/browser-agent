@@ -1,0 +1,21 @@
+node_modules/
+
+# Browser runtime state and credentials must never be committed.
+.browser-agent-data/
+profiles/
+auth/
+*.storage-state.json
+
+# Playwright runtime artifacts.
+.playwright-cli/
+test-results/
+artifacts/
+
+# Temporary or unmasked source material.
+tmp/
+screenshots/raw/
+.env
+.env.*
+
+# Local source memo; it contains unrelated planning notes and is not product documentation.
+memo.md
