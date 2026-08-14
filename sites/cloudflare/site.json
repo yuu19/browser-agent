@@ -1,0 +1,15 @@
+{
+  "baseUrl": "https://dash.cloudflare.com/",
+  "loginUrl": "https://dash.cloudflare.com/login",
+  "authMode": "profile",
+  "browser": {
+    "channel": "chrome",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "deviceScaleFactor": 2,
+    "locale": "ja-JP",
+    "captureHeaded": true
+  }
+}

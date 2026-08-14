@@ -1,0 +1,126 @@
+{
+  "dashboard-home": {
+    "path": "/",
+    "output": "artifacts/cloudflare/dashboard.png",
+    "fullPage": false,
+    "waitMs": 5000,
+    "maskColor": "#1f2937",
+    "prepare": [
+      {
+        "action": "waitFor",
+        "locator": {
+          "type": "role",
+          "role": "button",
+          "name": "Switch Account",
+          "exact": false
+        },
+        "match": "one",
+        "state": "visible",
+        "timeoutMs": 30000
+      },
+      {
+        "action": "waitFor",
+        "locator": {
+          "type": "css",
+          "value": "section.group\\/analytics div.react-grid-item div.-mx-4.min-h-10.flex-1"
+        },
+        "match": "all",
+        "state": "visible",
+        "timeoutMs": 30000
+      }
+    ],
+    "masks": [
+      {
+        "locator": {
+          "type": "role",
+          "role": "button",
+          "name": "Switch Account",
+          "exact": false
+        },
+        "match": "one",
+        "required": true
+      },
+      {
+        "locator": {
+          "type": "css",
+          "value": "div.min-w-0:has(> button:has-text(\"Recents\")) span.truncate.text-sm.font-medium.text-left"
+        },
+        "match": "all",
+        "required": true
+      },
+      {
+        "locator": {
+          "type": "css",
+          "value": "div.min-w-0:has(> button:has-text(\"Recents\")) span.whitespace-nowrap.shrink-0"
+        },
+        "match": "all",
+        "required": true
+      },
+      {
+        "locator": {
+          "type": "css",
+          "value": "section:has(> header h3#shortcut-col-0) header span.inline-flex"
+        },
+        "match": "all",
+        "required": true
+      },
+      {
+        "locator": {
+          "type": "css",
+          "value": "section:has(> header h3#shortcut-col-0) ul span.truncate.min-w-0.shrink"
+        },
+        "match": "all",
+        "required": true
+      },
+      {
+        "locator": {
+          "type": "css",
+          "value": "section:has(> header h3#shortcut-col-1) header span.inline-flex"
+        },
+        "match": "all",
+        "required": true
+      },
+      {
+        "locator": {
+          "type": "css",
+          "value": "section:has(> header h3#shortcut-col-1) ul span.truncate.min-w-0.shrink"
+        },
+        "match": "all",
+        "required": true
+      },
+      {
+        "locator": {
+          "type": "css",
+          "value": "section:has(> header h3#shortcut-col-2) ul span.truncate.min-w-0.shrink"
+        },
+        "match": "all",
+        "required": true
+      },
+      {
+        "locator": {
+          "type": "css",
+          "value": "section.group\\/analytics span.text-2xl.font-semibold.leading-tight.text-kumo-default"
+        },
+        "match": "all",
+        "required": true
+      },
+      {
+        "locator": {
+          "type": "css",
+          "value": "section.group\\/analytics span.text-sm.font-medium:is(.text-kumo-danger, .text-kumo-success)"
+        },
+        "match": "all",
+        "required": false
+      },
+      {
+        "locator": {
+          "type": "css",
+          "value": "section.group\\/analytics div.react-grid-item div.-mx-4.min-h-10.flex-1"
+        },
+        "match": "all",
+        "required": true
+      }
+    ],
+    "annotations": []
+  }
+}
