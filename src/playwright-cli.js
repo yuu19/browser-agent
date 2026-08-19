@@ -1,6 +1,7 @@
 import { chmod, mkdir, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { resolveBrowserChannel } from './browser.js';
 import { repositoryRoot, siteRuntimePaths, temporarySibling } from './paths.js';
 import { verifiedBrowserFontEnvironment } from './fonts.js';
 import { acquireLock, exists, releaseLock, writeJsonAtomic } from './runtime.js';
@@ -38,7 +39,7 @@ function browserConfig(site, runtimePaths, { headed, login = false } = {}) {
   const browser = {
     browserName: 'chromium',
     launchOptions: {
-      channel: site.browser.channel,
+      channel: resolveBrowserChannel(site.browser.channel),
       headless: !headed,
     },
     contextOptions: {

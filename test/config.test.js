@@ -5,9 +5,25 @@ import { validateCapture, validateSite } from '../src/config.js';
 test('site defaults to profile auth and a reproducible viewport', () => {
   const site = validateSite({ baseUrl: 'https://example.com' }, 'example');
   assert.equal(site.authMode, 'profile');
+  assert.equal(site.browser.channel, 'auto');
   assert.deepEqual(site.browser.viewport, { width: 1440, height: 900 });
   assert.equal(site.browser.deviceScaleFactor, 2);
   assert.equal(site.browser.captureHeaded, false);
+});
+
+test('site accepts portable and explicit browser channels', () => {
+  assert.equal(validateSite({ baseUrl: 'https://example.com' }, 'auto').browser.channel, 'auto');
+  assert.equal(validateSite({
+    baseUrl: 'https://example.com',
+    browser: { channel: 'chromium' },
+  }, 'arm').browser.channel, 'chromium');
+  assert.throws(
+    () => validateSite({
+      baseUrl: 'https://example.com',
+      browser: { channel: 'unknown-browser' },
+    }, 'bad'),
+    /must be one of/,
+  );
 });
 
 test('site accepts a bounded device scale factor', () => {

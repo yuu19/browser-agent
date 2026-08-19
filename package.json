@@ -10,7 +10,7 @@
     "browser-agent": "./bin/browser-agent.js"
   },
   "scripts": {
-    "check": "node --check bin/browser-agent.js && node --check src/cli.js && node --check src/capture.js && node --check src/fonts.js && node --check scripts/fetch-fonts.js",
+    "check": "node --check bin/browser-agent.js && node --check src/browser.js && node --check src/cli.js && node --check src/capture.js && node --check src/fonts.js && node --check src/imagemagick.js && node --check scripts/fetch-fonts.js",
     "fonts:check": "node scripts/fetch-fonts.js --check",
     "fonts:fetch": "node scripts/fetch-fonts.js",
     "test": "node --test",

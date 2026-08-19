@@ -1,20 +1,25 @@
 # browser-agent
 
-ログイン済みのGoogle Chromeを複数プロジェクトから操作し、機密情報を撮影時にマスクしたスクリーンショットを生成する共通ツールです。
+ログイン済みのブラウザを複数プロジェクトから操作し、機密情報を撮影時にマスクしたスクリーンショットを生成する共通ツールです。
 
 記事・Markdown・ユーザーマニュアル本文の生成は責務に含みません。
 
 ## 必要なもの
 
 - Node.js 20以上
-- Google Chrome Stable (`google-chrome`)
-- ImageMagick (`magick`)
+- Linux Arm64: Playwright Chromium
+- それ以外: Google Chrome Stable (`google-chrome`)
+- ImageMagick 6または7（`convert`と`identify`、または`magick`）
 - fontconfig (`fc-match`)
 
 セットアップ:
 
 ```bash
 npm install
+# Linux Arm64
+npx playwright install --with-deps chromium
+# それ以外
+npx playwright install --with-deps chrome
 node scripts/fetch-fonts.js
 npm link
 browser-agent doctor
@@ -23,7 +28,7 @@ browser-agent validate
 
 Playwright CLIとPlaywright Libraryは`package-lock.json`で固定します。グローバルに導入済みの`playwright-cli`には依存しません。日本語・英語のフォールバックフォントも、リポジトリ内のTTFとSHA-256で固定します。
 
-Chromeのフォント構成、導入手順、確認方法は[Chromeの日本語・英語フォント](docs/chrome-fonts.md)を参照してください。
+ブラウザのフォント構成、導入手順、確認方法は[ブラウザの日本語・英語フォント](docs/chrome-fonts.md)を参照してください。
 今回導入したパッケージ、追加設定、実行状態、再現手順は[セットアップ記録](docs/setup-record.md)にまとめています。
 
 ## ディレクトリ
@@ -31,7 +36,7 @@ Chromeのフォント構成、導入手順、確認方法は[Chromeの日本語�
 ```text
 browser-agent/
 ├── assets/fonts/                # 固定TTF、OFL、取得元とSHA-256
-├── config/fontconfig/           # Chrome専用のフォールバック設定
+├── config/fontconfig/           # ブラウザ専用のフォールバック設定
 ├── sites/<site>/site.json
 ├── sites/<site>/captures.json
 ├── bin/browser-agent.js
@@ -56,7 +61,7 @@ browser-agent/
   "loginUrl": "https://admin.example.com/login",
   "authMode": "profile",
   "browser": {
-    "channel": "chrome",
+    "channel": "auto",
     "viewport": { "width": 1440, "height": 900 },
     "deviceScaleFactor": 2,
     "locale": "ja-JP",
@@ -69,9 +74,11 @@ browser-agent/
 上の設定ではレイアウトを1440×900に保ったまま、2880×1800のPNGを生成します。
 倍率は1以上4以下で指定でき、既定値は2です。マスクと赤枠・番号も同じ倍率で処理します。
 
+`channel`の既定値は`auto`です。Linux Arm64ではPlaywright Chromium、それ以外ではGoogle Chromeを選択します。環境を固定する必要がある場合だけ、`chromium`または`chrome`を明示します。
+
 `authMode`:
 
-- `profile`: Chromeプロファイルをそのまま再利用します。既定値です。同一サイトの並列利用はロックされます。
+- `profile`: ブラウザプロファイルをそのまま再利用します。既定値です。同一サイトの並列利用はロックされます。
 - `state`: 手動ログイン後のCookie・localStorage等を保存し、独立したブラウザセッションへ読み込みます。
 
 認証情報、Cookie、APIキー、パスワードをサイト設定へ書かないでください。
@@ -82,17 +89,17 @@ browser-agent/
 
 ```bash
 browser-agent login open example
-# ChromeでログインとMFAを完了
+# ブラウザでログインとMFAを完了
 browser-agent login close example
 ```
 
-Chromeプロファイル自体へ状態が保存されるため、`login save`は不要です。
+ブラウザプロファイル自体へ状態が保存されるため、`login save`は不要です。
 
 ### state方式
 
 ```bash
 browser-agent login open example
-# ChromeでログインとMFAを完了
+# ブラウザでログインとMFAを完了
 browser-agent login save example
 ```
 
@@ -100,7 +107,7 @@ browser-agent login save example
 
 ## 通常のブラウザ操作
 
-固定版Playwright CLIへコマンドを渡します。`open`時のChrome、認証、profile、headed設定はサイト設定から強制されます。
+固定版Playwright CLIへコマンドを渡します。`open`時のブラウザ、認証、profile、headed設定はサイト設定から強制されます。
 
 ```bash
 browser-agent browser example open
@@ -256,6 +263,6 @@ npm run verify
 npm run test:integration
 ```
 
-通常のテストは設定、パス境界、ロック、原子的な書き込みを検証します。統合テストは実際のGoogle ChromeとImageMagickを起動し、撮影画像のマスク色・注釈色と、必須マスク失敗時に既存画像を保持することを検証します。
+通常のテストは設定、パス境界、ロック、原子的な書き込みを検証します。統合テストは自動選択されたブラウザとImageMagickを起動し、撮影画像のマスク色・注釈色と、必須マスク失敗時に既存画像を保持することを検証します。
 
-GitHub Actionsでは`npm run verify`と全サイト設定の検証を実行します。実ChromeとImageMagickを使う統合テストは、上記の`npm run test:integration`で確認します。
+GitHub Actionsでは`npm run verify`と全サイト設定の検証を実行します。実ブラウザとImageMagickを使う統合テストは、上記の`npm run test:integration`で確認します。

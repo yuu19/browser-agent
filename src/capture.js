@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { extname, dirname } from 'node:path';
 import { chromium } from 'playwright';
+import { resolveBrowserChannel } from './browser.js';
 import { assertCapturePrivacy } from './config.js';
 import { verifiedBrowserFontEnvironment } from './fonts.js';
+import { resolveImageMagick } from './imagemagick.js';
 import { buildLocator, resolveStepTargets, resolveTarget } from './locator.js';
 import { safeOutputPathChecked, siteRuntimePaths, temporarySibling } from './paths.js';
 import { acquireLock, exists, releaseLock, replaceFileAtomic } from './runtime.js';
@@ -201,15 +203,21 @@ async function runProcess(command, args) {
   });
 }
 
-async function imageDimensions(magick, path) {
-  const output = await runProcess(magick, ['identify', '-format', '%w,%h', path]);
+async function imageDimensions(imageMagick, path) {
+  const output = await runProcess(imageMagick.identify.command, [
+    ...imageMagick.identify.prefix,
+    '-format', '%w,%h', path,
+  ]);
   const [width, height] = output.trim().split(',').map(Number);
   if (!Number.isFinite(width) || !Number.isFinite(height)) throw new Error('ImageMagick returned invalid image dimensions');
   return { width, height };
 }
 
-async function assertPngContract(magick, path, expectedDimensions) {
-  const output = await runProcess(magick, ['identify', '-format', '%m|%w|%h|%z|%[colorspace]|%[channels]', path]);
+async function assertPngContract(imageMagick, path, expectedDimensions) {
+  const output = await runProcess(imageMagick.identify.command, [
+    ...imageMagick.identify.prefix,
+    '-format', '%m|%w|%h|%z|%[colorspace]|%[channels]', path,
+  ]);
   const [format, widthValue, heightValue, depthValue, colorspace, channels] = output.trim().split('|');
   const width = Number(widthValue);
   const height = Number(heightValue);
@@ -223,9 +231,10 @@ async function assertPngContract(magick, path, expectedDimensions) {
 }
 
 async function renderFinalImage(source, destination, annotations, env = process.env) {
-  const magick = env.BROWSER_AGENT_MAGICK || 'magick';
-  const dimensions = await imageDimensions(magick, source);
-  await runProcess(magick, [
+  const imageMagick = await resolveImageMagick(env);
+  const dimensions = await imageDimensions(imageMagick, source);
+  await runProcess(imageMagick.convert.command, [
+    ...imageMagick.convert.prefix,
     source,
     ...annotationArguments(dimensions.width, dimensions.height, annotations),
     '-alpha', 'off',
@@ -234,13 +243,14 @@ async function renderFinalImage(source, destination, annotations, env = process.
     '-strip',
     `PNG24:${destination}`,
   ]);
-  await assertPngContract(magick, destination, dimensions);
+  await assertPngContract(imageMagick, destination, dimensions);
 }
 
 async function openCaptureContext(site, paths, headed, env) {
   const browserEnv = await verifiedBrowserFontEnvironment(env);
+  const channel = resolveBrowserChannel(site.browser.channel);
   const options = {
-    channel: site.browser.channel,
+    channel,
     headless: !headed,
     viewport: site.browser.viewport,
     deviceScaleFactor: site.browser.deviceScaleFactor,
@@ -255,7 +265,7 @@ async function openCaptureContext(site, paths, headed, env) {
   if (!(await exists(paths.authState))) {
     throw new Error(`authentication state is missing for ${site.id}; run login open and login save first`);
   }
-  const browser = await chromium.launch({ channel: site.browser.channel, headless: !headed, env: browserEnv });
+  const browser = await chromium.launch({ channel, headless: !headed, env: browserEnv });
   const context = await browser.newContext({
     viewport: site.browser.viewport,
     deviceScaleFactor: site.browser.deviceScaleFactor,

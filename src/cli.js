@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { browserRuntimeCheck } from './browser.js';
 import { captureScreenshot } from './capture.js';
 import {
   assertCapturePrivacy,
@@ -10,6 +11,7 @@ import {
 } from './config.js';
 import { projectSessionId } from './paths.js';
 import { verifiedBrowserFontEnvironment } from './fonts.js';
+import { resolveImageMagick } from './imagemagick.js';
 import {
   closeLogin,
   openLogin,
@@ -157,13 +159,33 @@ async function commandVersion(command, args, env = process.env) {
 
 async function doctor() {
   const fontEnv = await verifiedBrowserFontEnvironment(process.env);
+  let imageMagick = null;
+  try {
+    imageMagick = await resolveImageMagick(process.env);
+  } catch {
+    // Report with the other runtime checks below.
+  }
+  const requestedChannels = new Set(['auto']);
+  for (const id of await listSiteIds()) {
+    const { site } = await loadSite(id);
+    requestedChannels.add(site.browser.channel);
+  }
+  const browserChecks = new Map();
+  for (const channel of requestedChannels) {
+    const check = browserRuntimeCheck(channel);
+    browserChecks.set(check.channel, check);
+  }
   const checks = [
-    ['Google Chrome', 'google-chrome', ['--version'], null, process.env],
-    ['ImageMagick', process.env.BROWSER_AGENT_MAGICK || 'magick', ['-version'], null, process.env],
+    ...[...browserChecks.values()].map((check) => [check.label, check.command, check.args, null, process.env]),
     ['Japanese sans-serif font', 'fc-match', ['-f', '%{family}|%{file}', 'sans-serif:lang=ja'], /Noto Sans JP.*NotoSansJP-Variable\.ttf/, fontEnv],
     ['English sans-serif font', 'fc-match', ['-f', '%{family}|%{file}', 'sans-serif:lang=en'], /Inter Variable.*InterVariable\.ttf/, fontEnv],
   ];
   let failed = false;
+  if (imageMagick) console.log(`ok  ImageMagick: ${imageMagick.version}`);
+  else {
+    failed = true;
+    console.log(`missing  ImageMagick: ${process.env.BROWSER_AGENT_MAGICK || 'magick or convert'}`);
+  }
   for (const [label, command, args, expected, env] of checks) {
     const version = await commandVersion(command, args, env);
     if (version && (!expected || expected.test(version))) console.log(`ok  ${label}: ${version}`);

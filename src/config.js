@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { BROWSER_CHANNELS } from './browser.js';
 import { assertSafeId, sitesRoot } from './paths.js';
 
 const LOCATOR_TYPES = new Set(['role', 'label', 'text', 'testId', 'placeholder', 'css']);
@@ -181,8 +182,12 @@ function validateBrowser(value, path) {
   const viewport = value.viewport ?? {};
   if (!isObject(viewport)) fail(`${path}.viewport`, 'must be an object');
   onlyKeys(viewport, new Set(['width', 'height']), `${path}.viewport`);
+  const channel = value.channel === undefined ? 'auto' : string(value.channel, `${path}.channel`);
+  if (!BROWSER_CHANNELS.has(channel)) {
+    fail(`${path}.channel`, `must be one of ${[...BROWSER_CHANNELS].join(', ')}`);
+  }
   return {
-    channel: value.channel === undefined ? 'chrome' : string(value.channel, `${path}.channel`),
+    channel,
     viewport: {
       width: positiveInteger(viewport.width, `${path}.viewport.width`, 1440),
       height: positiveInteger(viewport.height, `${path}.viewport.height`, 900),

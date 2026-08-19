@@ -1,8 +1,8 @@
-# Chromeの日本語・英語フォント
+# ブラウザの日本語・英語フォント
 
-Chromeでサイト固有のWebフォントを読み込める場合は、そのフォントを表示します。Webフォントがない場合や、指定フォントに対象文字がない場合だけ、リポジトリ内の固定フォントを使います。
+ChromeまたはChromiumでサイト固有のWebフォントを読み込める場合は、そのフォントを表示します。Webフォントがない場合や、指定フォントに対象文字がない場合だけ、リポジトリ内の固定フォントを使います。
 
-撮影時にフォントをダウンロードしません。固定フォントがない場合や内容が変わっている場合は、Chromeを起動する前に停止します。
+撮影時にフォントをダウンロードしません。固定フォントがない場合や内容が変わっている場合は、ブラウザを起動する前に停止します。
 
 ## 固定するフォールバック
 
@@ -29,11 +29,11 @@ npm run fonts:fetch
 node scripts/fetch-fonts.js --force
 ```
 
-撮影時にネットワーク取得は行いません。新しいフォント版へ更新するときは、取得元、SHA-256、ライセンス、実Chrome統合テストを同じ変更で更新します。
+撮影時にネットワーク取得は行いません。新しいフォント版へ更新するときは、取得元、SHA-256、ライセンス、実ブラウザ統合テストを同じ変更で更新します。
 
 ## 実行時の適用
 
-`capture`、`login open`、`browser open`は、Chrome起動前にTTFのSHA-256を検証します。検証後、専用fontconfigをChromeプロセスだけに適用します。
+`capture`、`login open`、`browser open`は、ブラウザ起動前にTTFのSHA-256を検証します。検証後、専用fontconfigをブラウザプロセスだけに適用します。
 
 サイト固有のWebフォントは置き換えません。`sans-serif`と`system-ui`、およびChromeが英語の既定名として使うArial・Helvetica系の未導入フォントだけを固定フォールバックへ解決します。
 
@@ -43,7 +43,7 @@ node scripts/fetch-fonts.js --force
 - [fontconfig設定](../config/fontconfig/browser-agent-fonts.conf)
 - [取得スクリプト](../scripts/fetch-fonts.js)
 
-専用fontconfigの設定とキャッシュは、既定では次に置きます。Chromeプロファイルや認証stateとは分離します。
+専用fontconfigの設定とキャッシュは、既定では次に置きます。ブラウザプロファイルや認証stateとは分離します。
 
 ```text
 ~/.local/share/browser-agent/fontconfig/
@@ -61,7 +61,7 @@ node scripts/fetch-fonts.js --force
 npm run fonts:check
 ```
 
-Chrome、ImageMagick、fontconfigの実際の選択をまとめて確認します。
+ブラウザ、ImageMagick、fontconfigの実際の選択をまとめて確認します。
 
 ```bash
 browser-agent doctor
@@ -74,4 +74,4 @@ Japanese sans-serif font: Noto Sans JP .../assets/fonts/NotoSansJP-Variable.ttf
 English sans-serif font: Inter Variable .../assets/fonts/InterVariable.ttf
 ```
 
-実Chrome統合テストでは、DevToolsの実使用フォント情報を読み取り、日本語と英語がそれぞれ固定TTFへ解決されたことを確認します。
+実ブラウザ統合テストでは、DevToolsの実使用フォント情報を読み取り、日本語と英語がそれぞれ固定TTFへ解決されたことを確認します。
