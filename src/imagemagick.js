@@ -6,16 +6,19 @@ function probeVersion(command, env) {
     const child = spawn(command, ['-version'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => { output += chunk; });
     child.stderr.on('data', (chunk) => { output += chunk; });
-    child.once('error', () => {
-      settled = true;
-      resolve(null);
-    });
-    child.once('exit', (code) => {
-      if (!settled) resolve(code === 0 ? output.trim().split('\n')[0] : null);
+    child.once('error', () => finish(null));
+    child.once('close', (code) => {
+      const version = output.trim().split('\n')[0];
+      finish(code === 0 && version ? version : null);
     });
   });
 }
