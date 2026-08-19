@@ -3,7 +3,7 @@
   "loginUrl": "https://betterstack.com/users/sign-in",
   "authMode": "profile",
   "browser": {
-    "channel": "chrome",
+    "channel": "auto",
     "viewport": {
       "width": 1440,
       "height": 900

@@ -1,6 +1,6 @@
 # browser-agentセットアップ記録
 
-この環境では、ログイン済みChromeを複数のプロジェクトから操作し、機密情報をマスクしたスクリーンショットを生成できます。
+この環境では、ログイン済みブラウザを複数のプロジェクトから操作し、機密情報をマスクしたスクリーンショットを生成できます。
 Cloudflare Dashboardは専用プロファイルでログイン済みです。
 ブラウザの認証情報はGitで管理しません。
 
@@ -43,7 +43,7 @@ npm run fonts:fetch
 npm run fonts:check
 ```
 
-フォントの割り当てと確認方法は[Chromeの日本語・英語フォント](chrome-fonts.md)に記録しています。
+フォントの割り当てと確認方法は[ブラウザの日本語・英語フォント](chrome-fonts.md)に記録しています。
 
 ## 既存環境で確認したもの
 
@@ -199,13 +199,14 @@ npm link
 
 ## 新しい環境での再現手順
 
-1. Google Chrome、Node.js 20以上、ImageMagick、fontconfigを用意します。
-2. `npm ci`でロック済み依存関係を導入します。
-3. `npm run fonts:fetch`で固定フォントを確認し、不足時だけ取得します。
-4. `node bin/browser-agent.js doctor`を実行します。
-5. `node bin/browser-agent.js validate`を実行します。
-6. SaaSごとに`login open`でログインとMFAを完了します。
-7. `login close`でChromeを正常終了します。
+1. Node.js 20以上、ImageMagick、fontconfigを用意します。
+2. Linux Arm64ではPlaywright Chromium、それ以外ではGoogle Chromeを用意します。
+3. `npm ci`でロック済み依存関係を導入します。
+4. `npm run fonts:fetch`で固定フォントを確認し、不足時だけ取得します。
+5. `node bin/browser-agent.js doctor`を実行します。
+6. `node bin/browser-agent.js validate`を実行します。
+7. SaaSごとに`login open`でログインとMFAを完了します。
+8. `login close`でブラウザを正常終了します。
 
 リポジトリ内の自動セットアップは次のコマンドです。
 
@@ -214,6 +215,14 @@ npm link
 ```
 
 `setup.sh`は`npm ci`、固定フォントの確認・不足時取得、`npm link`、環境確認、サイト設定検証を実行します。OSパッケージは導入しません。
+
+Linux Arm64でブラウザとOS依存関係を導入する場合は、`setup.sh`の前に次を実行します。
+
+```bash
+npx playwright install --with-deps chromium
+```
+
+`browser.channel`の`auto`は、Linux Arm64でPlaywright Chromiumを選びます。それ以外の環境ではGoogle Chromeを選びます。
 
 ## 検証結果
 
@@ -230,12 +239,27 @@ npm link
 - 実Chromeの日本語フォールバック: Noto Sans JP Variable
 - 実Chromeの英語フォールバック: Inter Variable
 
+### OCI A1 Arm64 VPS
+
+2026年8月19日にUbuntu 24.04のArm64環境で次を確認しました。
+
+- `browser.channel: auto`: Playwright Chromiumを選択
+- Playwright Chromium: `151.0.7922.34`
+- ImageMagick: Ubuntu標準の`6.9.12-98`を`convert`と`identify`で利用
+- `npm run verify`: 失敗0
+- 実Chromiumを使う統合テスト: 6件成功
+- 全サイト設定の検証: 成功
+- 日本語フォールバック: Noto Sans JP Variable
+- 英語フォールバック: Inter Variable
+
+Google ChromeのLinux版はArm64を対象にしないため、この環境ではPlaywrightが提供するArm64版Chromiumを使います。認証profileはVPSの`~/.local/share/browser-agent/profiles/`へ新しく保存し、WSLのChrome profileとは共有しません。
+
 ## 実装上の補足
 
 撮影処理は、マスク対象をすべて検証してからPNGを書き込みます。
 未マスク画像は保存しません。
 注釈がない撮影でも完成画像を公開できるよう、回帰テストを追加しています。
 高DPI撮影ではPlaywrightのdevice pixel出力を使い、ImageMagickで追加する注釈の座標、余白、線幅、文字も同じ倍率に変換します。
-フォントはセットアップ時だけ取得します。`capture`、`login open`、`browser open`ではローカルTTFを検証し、不足や改変がある場合はChromeを起動しません。
+フォントはセットアップ時だけ取得します。`capture`、`login open`、`browser open`ではローカルTTFを検証し、不足や改変がある場合はブラウザを起動しません。
 
 設計全体は[実装案](implementation-plan.md)を参照してください。

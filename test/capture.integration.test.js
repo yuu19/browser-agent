@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
+import { resolveBrowserChannel } from '../src/browser.js';
 import { captureScreenshot } from '../src/capture.js';
 import { verifiedBrowserFontEnvironment } from '../src/fonts.js';
+import { resolveImageMagick } from '../src/imagemagick.js';
 
 const integrationTest = process.env.BROWSER_AGENT_INTEGRATION === '1' ? test : test.skip;
 
@@ -22,6 +24,12 @@ function commandOutput(command, args) {
     child.on('error', reject);
     child.on('exit', (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr)));
   });
+}
+
+async function imageMagickOutput(operation, args) {
+  const imageMagick = await resolveImageMagick();
+  const selected = imageMagick[operation];
+  return commandOutput(selected.command, [...selected.prefix, ...args]);
 }
 
 function fixtureUrl({ brokenImage = false } = {}) {
@@ -43,7 +51,7 @@ function fixtureSite(baseUrl) {
     loginUrl: baseUrl,
     authMode: 'profile',
     browser: {
-      channel: 'chrome',
+      channel: 'auto',
       viewport: { width: 800, height: 600 },
       deviceScaleFactor: 2,
       locale: 'en-US',
@@ -89,11 +97,11 @@ integrationTest('capture masks before writing and adds an annotation', { timeout
   const output = await captureScreenshot(fixtureSite(url), fixtureCapture(url), { cwd: root, env });
 
   assert.equal(output, join(root, 'artifacts', 'result.png'));
-  const dimensions = await commandOutput('magick', ['identify', '-format', '%w,%h', output]);
+  const dimensions = await imageMagickOutput('identify', ['-format', '%w,%h', output]);
   assert.equal(dimensions, '1600,1200');
-  const format = await commandOutput('magick', ['identify', '-format', '%m,%z,%[colorspace],%[channels]', output]);
+  const format = await imageMagickOutput('identify', ['-format', '%m,%z,%[colorspace],%[channels]', output]);
   assert.equal(format, 'PNG,8,sRGB,srgb');
-  const pixels = await commandOutput('magick', [output, '-format', '%[pixel:p{300,250}] %[pixel:p{792,500}]', 'info:']);
+  const pixels = await imageMagickOutput('convert', [output, '-format', '%[pixel:p{300,250}] %[pixel:p{792,500}]', 'info:']);
   assert.match(pixels.toLowerCase(), /1122?33|srgba?\(17,34,51(?:,1)?\)/);
   assert.match(pixels.toLowerCase(), /dc2626|srgba?\(220,38,38(?:,1)?\)/);
   assert.deepEqual((await readdir(join(root, 'artifacts'))).sort(), ['result.png']);
@@ -128,9 +136,9 @@ integrationTest('capture without annotations still publishes the final image', {
   capture.annotations = [];
 
   const output = await captureScreenshot(fixtureSite(url), capture, { cwd: root, env });
-  const pixels = await commandOutput('magick', [output, '-format', '%[pixel:p{300,250}]', 'info:']);
+  const pixels = await imageMagickOutput('convert', [output, '-format', '%[pixel:p{300,250}]', 'info:']);
   assert.match(pixels.toLowerCase(), /1122?33|srgba?\(17,34,51(?:,1)?\)/);
-  const format = await commandOutput('magick', ['identify', '-format', '%m,%z,%[colorspace],%[channels]', output]);
+  const format = await imageMagickOutput('identify', ['-format', '%m,%z,%[colorspace],%[channels]', output]);
   assert.equal(format, 'PNG,8,sRGB,srgb');
   assert.deepEqual((await readdir(join(root, 'artifacts'))).sort(), ['result.png']);
 });
@@ -164,17 +172,17 @@ integrationTest('capture allows a reviewed exception for an intentionally broken
   };
 
   const output = await captureScreenshot(fixtureSite(url), capture, { cwd: root, env });
-  const format = await commandOutput('magick', ['identify', '-format', '%m,%z,%[colorspace],%[channels]', output]);
+  const format = await imageMagickOutput('identify', ['-format', '%m,%z,%[colorspace],%[channels]', output]);
   assert.equal(format, 'PNG,8,sRGB,srgb');
 });
 
-integrationTest('Chrome uses the repository-local fallback fonts', { timeout: 30_000 }, async () => {
+integrationTest('the selected browser uses the repository-local fallback fonts', { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'browser-agent-local-fonts-'));
   const env = await verifiedBrowserFontEnvironment({
     ...process.env,
     BROWSER_AGENT_DATA_DIR: join(root, 'data'),
   });
-  const browser = await chromium.launch({ channel: 'chrome', headless: true, env });
+  const browser = await chromium.launch({ channel: resolveBrowserChannel('auto'), headless: true, env });
   try {
     const context = await browser.newContext({ locale: 'ja-JP' });
     const page = await context.newPage();

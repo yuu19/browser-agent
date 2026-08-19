@@ -2,20 +2,20 @@
 
 ## 目的
 
-複数のプロジェクトから、ログイン済みのGoogle ChromeをPlaywrightで操作し、機密情報を撮影時にマスクした高解像度スクリーンショットを再現可能に生成する。
+複数のプロジェクトから、ログイン済みのChromeまたはChromiumをPlaywrightで操作し、機密情報を撮影時にマスクした高解像度スクリーンショットを再現可能に生成する。
 
 ## 責務の分離
 
 ```text
 Git管理するもの
   assets/fonts/                 固定フォント、ライセンス、取得元とSHA-256
-  config/fontconfig/            Chrome専用のフォールバック設定
+  config/fontconfig/            ブラウザ専用のフォールバック設定
   sites/<site>/site.json       サイト、認証方式、ブラウザ設定
   sites/<site>/captures.json   撮影、マスク、注釈、準備操作
   src/                         検証・認証・撮影処理
 
 Git管理しないもの
-  ~/.local/share/browser-agent/profiles/  Chromeプロファイル
+  ~/.local/share/browser-agent/profiles/  ブラウザプロファイル
   ~/.local/share/browser-agent/auth/      Playwright認証state
   ~/.local/share/browser-agent/runtime/   一時設定・ロック
 ```
@@ -29,7 +29,7 @@ Git管理しないもの
 
 ## 安全性
 
-- 認証情報、Cookie、Chromeプロファイルはリポジトリ外に置く。
+- 認証情報、Cookie、ブラウザプロファイルはリポジトリ外に置く。
 - 対話操作用の`browser`では、未マスク画像を残す`screenshot`と`pdf`を実行しない。完成画像は`capture`だけで生成する。
 - 設定から任意JavaScript、入力、アップロードを実行しない。
 - 定義済み撮影のURLは上書きしない。画面ごとに撮影定義とマスクをレビューする。
@@ -37,7 +37,7 @@ Git管理しないもの
 - 必須マスクが一致しない、または件数条件を満たさない場合は撮影しない。
 - Webフォントと表示対象画像の読み込みを確認する。意図的に読み込めない画像は、構造化locatorで個別に除外する。
 - サイト固有のWebフォントを優先し、未指定時の日本語と英語だけを固定したローカルTTFへフォールバックする。
-- ローカルTTFのSHA-256が不一致の場合はChromeを起動しない。撮影中はフォントをダウンロードしない。
+- ローカルTTFのSHA-256が不一致の場合はブラウザを起動しない。撮影中はフォントをダウンロードしない。
 - マスクはPlaywrightのScreenshot APIで適用し、未マスク画像をディスクへ書かない。
 - 表示領域とPNG出力倍率を分離し、既定では1440×900のレイアウトを2880×1800で出力する。
 - 赤枠・番号の座標、余白、線幅、文字サイズをPNG出力倍率に合わせる。
