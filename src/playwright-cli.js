@@ -1,19 +1,20 @@
 import { chmod, mkdir, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { repositoryRoot, safeOutputPathChecked, siteRuntimePaths, temporarySibling } from './paths.js';
+import { repositoryRoot, siteRuntimePaths, temporarySibling } from './paths.js';
+import { verifiedBrowserFontEnvironment } from './fonts.js';
 import { acquireLock, exists, releaseLock, writeJsonAtomic } from './runtime.js';
 
 const cliPath = join(repositoryRoot, 'node_modules', '.bin', 'playwright-cli');
 
-export async function runPlaywrightCli(args, { captureOutput = false } = {}) {
+export async function runPlaywrightCli(args, { captureOutput = false, env = process.env } = {}) {
   if (!(await exists(cliPath))) {
     throw new Error('local playwright-cli is not installed; run npm install in the browser-agent repository');
   }
   return new Promise((resolve, reject) => {
     const child = spawn(cliPath, args, {
       cwd: repositoryRoot,
-      env: process.env,
+      env,
       stdio: captureOutput ? ['inherit', 'pipe', 'pipe'] : 'inherit',
     });
     let stdout = '';
@@ -72,7 +73,11 @@ export async function openLogin(site, env = process.env) {
   try {
     await mkdir(site.authMode === 'profile' ? paths.profile : paths.loginProfile, { recursive: true, mode: 0o700 });
     const config = await writeRuntimeConfig(site, paths, { headed: true, login: true, session: `login-${site.id}` });
-    await runPlaywrightCli([`-s=browser-agent-login-${site.id}`, 'open', site.loginUrl, `--config=${config}`]);
+    const browserEnv = await verifiedBrowserFontEnvironment(env);
+    await runPlaywrightCli(
+      [`-s=browser-agent-login-${site.id}`, 'open', site.loginUrl, `--config=${config}`],
+      { env: browserEnv },
+    );
   } catch (error) {
     await releaseLock(paths.lock, owner);
     throw error;
@@ -122,6 +127,10 @@ export async function runBrowserCommand(site, session, commandArgs, env = proces
   const command = commandArgs[0];
   const owner = `browser:${sessionName}`;
 
+  if (command === 'screenshot' || command === 'pdf') {
+    throw new Error(`${command} is disabled in browser mode; use the fail-closed capture command for persistent images`);
+  }
+
   if (command === 'open') {
     assertControlledOpenArgs(commandArgs.slice(1));
     if (site.authMode === 'state' && !(await exists(paths.authState))) {
@@ -131,9 +140,10 @@ export async function runBrowserCommand(site, session, commandArgs, env = proces
     try {
       if (site.authMode === 'profile') await mkdir(paths.profile, { recursive: true, mode: 0o700 });
       const config = await writeRuntimeConfig(site, paths, { headed: true, login: false, session: sessionName });
+      const browserEnv = await verifiedBrowserFontEnvironment(env);
       const rest = commandArgs.slice(1);
       const url = rest.length > 0 && !rest[0].startsWith('-') ? rest.shift() : site.baseUrl;
-      await runPlaywrightCli([`-s=${sessionName}`, 'open', url, ...rest, `--config=${config}`]);
+      await runPlaywrightCli([`-s=${sessionName}`, 'open', url, ...rest, `--config=${config}`], { env: browserEnv });
     } catch (error) {
       if (site.authMode === 'profile') await releaseLock(paths.lock, owner);
       throw error;
@@ -141,26 +151,7 @@ export async function runBrowserCommand(site, session, commandArgs, env = proces
     return;
   }
 
-  const rewrittenArgs = [...commandArgs];
-  if (['screenshot', 'snapshot', 'pdf'].includes(command)) {
-    for (let index = 1; index < rewrittenArgs.length; index += 1) {
-      if (rewrittenArgs[index] === '--filename') {
-        const value = rewrittenArgs[index + 1];
-        if (!value) throw new Error('--filename requires a value');
-        const output = await safeOutputPathChecked(process.cwd(), value);
-        await mkdir(dirname(output), { recursive: true });
-        rewrittenArgs.splice(index, 2, `--filename=${output}`);
-        break;
-      }
-      if (rewrittenArgs[index].startsWith('--filename=')) {
-        const output = await safeOutputPathChecked(process.cwd(), rewrittenArgs[index].slice('--filename='.length));
-        await mkdir(dirname(output), { recursive: true });
-        rewrittenArgs[index] = `--filename=${output}`;
-        break;
-      }
-    }
-  }
-  await runPlaywrightCli([`-s=${sessionName}`, ...rewrittenArgs]);
+  await runPlaywrightCli([`-s=${sessionName}`, ...commandArgs]);
   if (command === 'close' && site.authMode === 'profile') await releaseLock(paths.lock, owner);
 }
 

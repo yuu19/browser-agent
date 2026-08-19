@@ -1,0 +1,15 @@
+{
+  "baseUrl": "https://betterstack.com/",
+  "loginUrl": "https://betterstack.com/users/sign-in",
+  "authMode": "profile",
+  "browser": {
+    "channel": "chrome",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "deviceScaleFactor": 2,
+    "locale": "ja-JP",
+    "captureHeaded": true
+  }
+}

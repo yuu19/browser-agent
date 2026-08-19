@@ -5,6 +5,7 @@ import { assertSafeId, sitesRoot } from './paths.js';
 const LOCATOR_TYPES = new Set(['role', 'label', 'text', 'testId', 'placeholder', 'css']);
 const PREPARE_ACTIONS = new Set(['click', 'hover', 'press', 'scrollIntoView', 'waitFor']);
 const WAIT_STATES = new Set(['attached', 'detached', 'visible', 'hidden']);
+const PRIVACY_MODES = new Set(['masked', 'public']);
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -113,6 +114,33 @@ export function validateAnnotationTarget(value, path = 'annotation') {
   return validateTarget(value, path, { annotation: true });
 }
 
+function validateReadiness(value, path) {
+  if (value === undefined) value = {};
+  if (!isObject(value)) fail(path, 'must be an object');
+  onlyKeys(value, new Set(['fonts', 'images', 'timeoutMs', 'ignoreImages']), path);
+  const ignoreImages = value.ignoreImages ?? [];
+  if (!Array.isArray(ignoreImages)) fail(`${path}.ignoreImages`, 'must be an array');
+  const images = boolean(value.images, `${path}.images`, true);
+  if (!images && ignoreImages.length > 0) {
+    fail(`${path}.ignoreImages`, 'requires images to be enabled');
+  }
+  return {
+    fonts: boolean(value.fonts, `${path}.fonts`, true),
+    images,
+    timeoutMs: positiveInteger(value.timeoutMs, `${path}.timeoutMs`, 10_000),
+    ignoreImages: ignoreImages.map((target, index) => validateTarget(target, `${path}.ignoreImages[${index}]`)),
+  };
+}
+
+export function assertCapturePrivacy(capture, path = 'capture') {
+  const privacy = capture.privacy ?? 'masked';
+  if (!PRIVACY_MODES.has(privacy)) fail(`${path}.privacy`, 'must be "masked" or "public"');
+  if (privacy === 'masked' && !capture.masks?.some((mask) => mask.required !== false)) {
+    fail(`${path}.masks`, 'masked captures require at least one required mask; use privacy "public" only for verified public pages');
+  }
+  return { ...capture, privacy };
+}
+
 function validateColor(value, path) {
   string(value, path);
   if (!/^#[0-9a-fA-F]{6}$/.test(value)) fail(path, 'must be a six-digit hex color');
@@ -189,24 +217,26 @@ export function validateSite(value, siteId, path = 'site.json') {
 
 export function validateCapture(value, captureId, path = 'captures.json') {
   if (!isObject(value)) fail(path, 'must be an object');
-  onlyKeys(value, new Set(['path', 'output', 'fullPage', 'waitMs', 'maskColor', 'prepare', 'masks', 'annotations']), path);
+  onlyKeys(value, new Set(['path', 'output', 'privacy', 'fullPage', 'waitMs', 'maskColor', 'readiness', 'prepare', 'masks', 'annotations']), path);
   const prepare = value.prepare ?? [];
   const masks = value.masks ?? [];
   const annotations = value.annotations ?? [];
   if (!Array.isArray(prepare)) fail(`${path}.prepare`, 'must be an array');
   if (!Array.isArray(masks)) fail(`${path}.masks`, 'must be an array');
   if (!Array.isArray(annotations)) fail(`${path}.annotations`, 'must be an array');
-  return {
+  return assertCapturePrivacy({
     id: captureId,
+    privacy: value.privacy ?? 'masked',
     path: string(value.path, `${path}.path`),
     output: string(value.output, `${path}.output`),
     fullPage: boolean(value.fullPage, `${path}.fullPage`, false),
     waitMs: nonNegativeInteger(value.waitMs, `${path}.waitMs`, 500),
     maskColor: value.maskColor === undefined ? '#1f2937' : validateColor(value.maskColor, `${path}.maskColor`),
+    readiness: validateReadiness(value.readiness, `${path}.readiness`),
     prepare: prepare.map((step, index) => validatePrepare(step, `${path}.prepare[${index}]`)),
     masks: masks.map((target, index) => validateMaskTarget(target, `${path}.masks[${index}]`)),
     annotations: annotations.map((target, index) => validateAnnotationTarget(target, `${path}.annotations[${index}]`)),
-  };
+  }, path);
 }
 
 async function readJson(path) {

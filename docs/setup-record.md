@@ -4,7 +4,7 @@
 Cloudflare Dashboardは専用プロファイルでログイン済みです。
 ブラウザの認証情報はGitで管理しません。
 
-この文書は、2026年8月15日時点の導入内容と設定状態を記録しています。
+この文書は、2026年8月18日時点の導入内容と設定状態を記録しています。
 
 ## 今回導入したもの
 
@@ -29,17 +29,18 @@ npm install
 
 ### 日本語・英語フォント
 
-WSLのUbuntuへ、次のフォントを導入しました。
+ブラウザ撮影用のフォールバックとして、次のTTFをリポジトリ内に固定しました。
 
-| 用途 | パッケージ | バージョン |
+| 用途 | フォント | 固定元 |
 |---|---|---|
-| 日本語のゴシック体・明朝体 | `fonts-noto-cjk` | `1:20230817+repack1-3` |
-| 英語のUIフォント | `fonts-inter` | `4.0+ds-1` |
+| 日本語のゴシック体 | Noto Sans JP Variable | Google Fonts `e1118da94a8cb00cf6d06cdac9ef13eb1e5c6ab7` |
+| 英語のUIフォント | Inter Variable | Inter `v4.1` |
 
-導入時のコマンド:
+取得・検証コマンド:
 
 ```bash
-sudo apt-get install -y fonts-noto-cjk fonts-inter
+npm run fonts:fetch
+npm run fonts:check
 ```
 
 フォントの割り当てと確認方法は[Chromeの日本語・英語フォント](chrome-fonts.md)に記録しています。
@@ -123,19 +124,40 @@ artifacts/cloudflare/dashboard.png
 
 `artifacts/`はGitの対象外です。
 
-### フォントの優先順位
+### Better StackとStripeの登録
 
-日本語ページではNoto CJK、英語ページではInterを優先します。
-正本は[fontconfig設定](../config/fontconfig/browser-agent-fonts.conf)です。
+Better StackとStripeは、Cloudflareとは別の永続Chromeプロファイルを使います。
+一方のサービスで認証状態が変わっても、もう一方には影響しません。
 
-実行環境では、次の場所へコピーしました。
+Gitで管理する設定ファイル:
+
+- `sites/betterstack/site.json`
+- `sites/betterstack/captures.json`
+- `sites/stripe/site.json`
+- `sites/stripe/captures.json`
+
+Gitで管理しないログイン状態:
 
 ```text
-~/.config/fontconfig/conf.d/50-browser-agent-fonts.conf
+~/.local/share/browser-agent/profiles/betterstack/
+~/.local/share/browser-agent/profiles/stripe/
 ```
 
-設定の反映時に`fc-cache -f`を実行しました。
-起動中のブラウザはないため、次回起動から新しい割り当てが使われます。
+登録時のメールアドレス、パスワード、確認コードはChrome上で入力します。
+Stripeの事業者情報、本人確認書類、銀行口座情報も設定ファイルや文書には保存しません。
+
+### フォントの優先順位
+
+サイト固有のWebフォントを読み込めない場合、日本語はNoto Sans JP、英語はInter Variableへフォールバックします。
+正本は[fontconfig設定](../config/fontconfig/browser-agent-fonts.conf)です。
+
+Chromeへ渡す専用設定とキャッシュは、次の場所に作成します。
+
+```text
+~/.local/share/browser-agent/fontconfig/
+```
+
+ユーザー全体のfontconfigは変更しません。Chrome起動前にフォント本体のSHA-256を検証し、専用fontconfigをそのChromeプロセスだけに適用します。
 
 ### Gitへ含めないもの
 
@@ -177,15 +199,13 @@ npm link
 
 ## 新しい環境での再現手順
 
-1. Google Chrome、Node.js 20以上、ImageMagickを用意します。
-2. Noto CJKとInterをインストールします。
-3. `npm ci`でロック済み依存関係を導入します。
-4. fontconfig設定をユーザー設定へコピーします。
-5. `fc-cache -f`を実行します。
-6. `node bin/browser-agent.js doctor`を実行します。
-7. `node bin/browser-agent.js validate`を実行します。
-8. SaaSごとに`login open`でログインとMFAを完了します。
-9. `login close`でChromeを正常終了します。
+1. Google Chrome、Node.js 20以上、ImageMagick、fontconfigを用意します。
+2. `npm ci`でロック済み依存関係を導入します。
+3. `npm run fonts:fetch`で固定フォントを確認し、不足時だけ取得します。
+4. `node bin/browser-agent.js doctor`を実行します。
+5. `node bin/browser-agent.js validate`を実行します。
+6. SaaSごとに`login open`でログインとMFAを完了します。
+7. `login close`でChromeを正常終了します。
 
 リポジトリ内の自動セットアップは次のコマンドです。
 
@@ -193,25 +213,22 @@ npm link
 ./setup.sh
 ```
 
-`setup.sh`は`npm ci`、`npm link`、環境確認、サイト設定検証を実行します。
-OSパッケージの導入とfontconfig設定のコピーは行いません。
-これらはsudoやユーザーディレクトリの変更を伴うため、上記の手順で明示的に実行します。
+`setup.sh`は`npm ci`、固定フォントの確認・不足時取得、`npm link`、環境確認、サイト設定検証を実行します。OSパッケージは導入しません。
 
 ## 検証結果
 
-2026年8月15日に次を確認しました。
+2026年8月18日に次を確認しました。
 
 - `npm run verify`: 成功
-- 実Chromeを使う撮影統合テスト: 3件成功
+- 実Chromeを使う統合テスト: 6件成功
 - Cloudflare設定検証: 成功
 - Cloudflareのマスク付き撮影: 成功
 - 高解像度撮影（1440×900表示、2880×1800出力）: 成功
 - Cloudflareプロファイル: 保存済み
 - ブラウザセッション: すべて終了済み
-- 日本語ゴシック体: Noto Sans CJK JP
-- 英語ゴシック体: Inter
-- 日本語明朝体: Noto Serif CJK JP
-- 日本語等幅フォント: Noto Sans Mono CJK JP
+- ローカルTTFのSHA-256検証: 成功
+- 実Chromeの日本語フォールバック: Noto Sans JP Variable
+- 実Chromeの英語フォールバック: Inter Variable
 
 ## 実装上の補足
 
@@ -219,5 +236,6 @@ OSパッケージの導入とfontconfig設定のコピーは行いません。
 未マスク画像は保存しません。
 注釈がない撮影でも完成画像を公開できるよう、回帰テストを追加しています。
 高DPI撮影ではPlaywrightのdevice pixel出力を使い、ImageMagickで追加する注釈の座標、余白、線幅、文字も同じ倍率に変換します。
+フォントはセットアップ時だけ取得します。`capture`、`login open`、`browser open`ではローカルTTFを検証し、不足や改変がある場合はChromeを起動しません。
 
 設計全体は[実装案](implementation-plan.md)を参照してください。

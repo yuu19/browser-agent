@@ -1,7 +1,10 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { extname, dirname } from 'node:path';
 import { chromium } from 'playwright';
+import { assertCapturePrivacy } from './config.js';
+import { verifiedBrowserFontEnvironment } from './fonts.js';
 import { buildLocator, resolveStepTargets, resolveTarget } from './locator.js';
 import { safeOutputPathChecked, siteRuntimePaths, temporarySibling } from './paths.js';
 import { acquireLock, exists, releaseLock, replaceFileAtomic } from './runtime.js';
@@ -84,6 +87,75 @@ async function resolveAnnotations(page, definitions, fullPage, viewport, deviceS
   return annotations;
 }
 
+function readinessOptions(capture) {
+  return capture.readiness ?? {
+    fonts: true,
+    images: true,
+    timeoutMs: 10_000,
+    ignoreImages: [],
+  };
+}
+
+async function markIgnoredImages(page, definitions) {
+  if (definitions.length === 0) return null;
+  const attribute = `data-browser-agent-ignore-${randomUUID()}`;
+  for (let index = 0; index < definitions.length; index += 1) {
+    const targets = await resolveTarget(page, definitions[index], `readiness.ignoreImages[${index}]`);
+    for (const target of targets) {
+      await target.evaluate((element, marker) => {
+        if (element.tagName !== 'IMG') throw new Error('readiness.ignoreImages must target img elements');
+        element.setAttribute(marker, '');
+      }, attribute);
+    }
+  }
+  return attribute;
+}
+
+async function waitForPageReadiness(page, readiness) {
+  const ignoredImageAttribute = await markIgnoredImages(page, readiness.ignoreImages);
+  try {
+    if (readiness.fonts) {
+      await page.waitForFunction(
+        () => !document.fonts || document.fonts.status === 'loaded',
+        undefined,
+        { timeout: readiness.timeoutMs },
+      );
+    }
+    if (readiness.images) {
+      await page.waitForFunction(
+        (ignoreAttribute) => [...document.images]
+          .filter((image) => {
+            if (ignoreAttribute && image.hasAttribute(ignoreAttribute)) return false;
+            const style = getComputedStyle(image);
+            const rect = image.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+          })
+          .every((image) => image.complete),
+        ignoredImageAttribute,
+        { timeout: readiness.timeoutMs },
+      );
+      const failedImageCount = await page.evaluate((ignoreAttribute) => [...document.images]
+        .filter((image) => {
+          if (ignoreAttribute && image.hasAttribute(ignoreAttribute)) return false;
+          const style = getComputedStyle(image);
+          const rect = image.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        })
+        .filter((image) => image.naturalWidth === 0 || image.naturalHeight === 0)
+        .length, ignoredImageAttribute);
+      if (failedImageCount > 0) {
+        throw new Error(`${failedImageCount} visible image(s) failed to load; add a reviewed readiness.ignoreImages exception if intentional`);
+      }
+    }
+  } finally {
+    if (ignoredImageAttribute) {
+      await page.locator(`[${ignoredImageAttribute}]`).evaluateAll((elements, marker) => {
+        for (const element of elements) element.removeAttribute(marker);
+      }, ignoredImageAttribute).catch(() => {});
+    }
+  }
+}
+
 function annotationArguments(width, height, annotations) {
   const args = [];
   for (const item of annotations) {
@@ -136,23 +208,44 @@ async function imageDimensions(magick, path) {
   return { width, height };
 }
 
-async function annotateImage(source, destination, annotations, env = process.env) {
-  if (annotations.length === 0) {
-    await replaceFileAtomic(source, destination);
-    return;
+async function assertPngContract(magick, path, expectedDimensions) {
+  const output = await runProcess(magick, ['identify', '-format', '%m|%w|%h|%z|%[colorspace]|%[channels]', path]);
+  const [format, widthValue, heightValue, depthValue, colorspace, channels] = output.trim().split('|');
+  const width = Number(widthValue);
+  const height = Number(heightValue);
+  const depth = Number(depthValue);
+  if (format !== 'PNG' || width !== expectedDimensions.width || height !== expectedDimensions.height) {
+    throw new Error('final image must be a PNG with the captured physical dimensions');
   }
-  const magick = env.BROWSER_AGENT_MAGICK || 'magick';
-  const { width, height } = await imageDimensions(magick, source);
-  await runProcess(magick, [source, ...annotationArguments(width, height, annotations), destination]);
+  if (depth !== 8 || colorspace.toLowerCase() !== 'srgb' || channels.toLowerCase() !== 'srgb') {
+    throw new Error(`final PNG must be opaque 8-bit sRGB RGB; received depth=${depthValue}, colorspace=${colorspace}, channels=${channels}`);
+  }
 }
 
-async function openCaptureContext(site, paths, headed) {
+async function renderFinalImage(source, destination, annotations, env = process.env) {
+  const magick = env.BROWSER_AGENT_MAGICK || 'magick';
+  const dimensions = await imageDimensions(magick, source);
+  await runProcess(magick, [
+    source,
+    ...annotationArguments(dimensions.width, dimensions.height, annotations),
+    '-alpha', 'off',
+    '-colorspace', 'sRGB',
+    '-depth', '8',
+    '-strip',
+    `PNG24:${destination}`,
+  ]);
+  await assertPngContract(magick, destination, dimensions);
+}
+
+async function openCaptureContext(site, paths, headed, env) {
+  const browserEnv = await verifiedBrowserFontEnvironment(env);
   const options = {
     channel: site.browser.channel,
     headless: !headed,
     viewport: site.browser.viewport,
     deviceScaleFactor: site.browser.deviceScaleFactor,
     locale: site.browser.locale,
+    env: browserEnv,
   };
   if (site.authMode === 'profile') {
     await mkdir(paths.profile, { recursive: true, mode: 0o700 });
@@ -162,7 +255,7 @@ async function openCaptureContext(site, paths, headed) {
   if (!(await exists(paths.authState))) {
     throw new Error(`authentication state is missing for ${site.id}; run login open and login save first`);
   }
-  const browser = await chromium.launch({ channel: site.browser.channel, headless: !headed });
+  const browser = await chromium.launch({ channel: site.browser.channel, headless: !headed, env: browserEnv });
   const context = await browser.newContext({
     viewport: site.browser.viewport,
     deviceScaleFactor: site.browser.deviceScaleFactor,
@@ -173,6 +266,10 @@ async function openCaptureContext(site, paths, headed) {
 }
 
 export async function captureScreenshot(site, capture, options = {}) {
+  capture = assertCapturePrivacy(capture, `capture ${capture.id ?? 'unknown'}`);
+  if (options.path !== undefined && capture.id !== 'adhoc') {
+    throw new Error('path cannot override a defined capture; create a separate capture definition');
+  }
   const cwd = options.cwd ?? process.cwd();
   const env = options.env ?? process.env;
   const output = await safeOutputPathChecked(cwd, options.output ?? capture.output);
@@ -189,12 +286,13 @@ export async function captureScreenshot(site, capture, options = {}) {
   let context;
   if (site.authMode === 'profile') await acquireLock(paths.lock, lockOwner);
   try {
-    ({ browser, context } = await openCaptureContext(site, paths, headed));
+    ({ browser, context } = await openCaptureContext(site, paths, headed, env));
     const pages = context.pages();
     const page = pages[0] ?? await context.newPage();
     await page.goto(resolveUrl(site, options.path ?? capture.path), { waitUntil: 'domcontentloaded' });
     await runPreparation(page, capture.prepare);
     if (capture.waitMs > 0) await page.waitForTimeout(capture.waitMs);
+    await waitForPageReadiness(page, readinessOptions(capture));
 
     // Resolve every required target before writing any image.
     const masks = await resolveMasks(page, capture.masks);
@@ -215,7 +313,7 @@ export async function captureScreenshot(site, capture, options = {}) {
       caret: 'hide',
     });
 
-    await annotateImage(masked, annotated, annotations, env);
+    await renderFinalImage(masked, annotated, annotations, env);
     await replaceFileAtomic(annotated, output);
     return output;
   } finally {

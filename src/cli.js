@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { captureScreenshot } from './capture.js';
 import {
+  assertCapturePrivacy,
   listSiteIds,
   loadSite,
   validateAnnotationTarget,
@@ -8,6 +9,7 @@ import {
   validatePrepare,
 } from './config.js';
 import { projectSessionId } from './paths.js';
+import { verifiedBrowserFontEnvironment } from './fonts.js';
 import {
   closeLogin,
   openLogin,
@@ -30,7 +32,7 @@ Usage:
   browser-agent doctor
 
 Capture options:
-  --path=<path-or-url>       Override the configured capture path
+  --path=<path-or-url>       Set the path for an ad-hoc capture
   --output=<relative.png>    Override the output path (must stay under cwd)
   --headed | --headless      Override browser visibility
   --full-page | --no-full-page
@@ -70,13 +72,14 @@ function parseNonNegativeInteger(value, name) {
   return number;
 }
 
-function parseCaptureArgs(args, captures) {
+export function parseCaptureArgs(args, captures) {
   let captureId;
   if (args[0] && !args[0].startsWith('-')) captureId = args.shift();
   const base = captureId
     ? structuredClone(requireArg(captures[captureId], `unknown capture id: ${captureId}`))
     : {
         id: 'adhoc',
+        privacy: 'masked',
         path: undefined,
         output: undefined,
         fullPage: false,
@@ -92,6 +95,7 @@ function parseCaptureArgs(args, captures) {
     const arg = args[index];
     let parsed;
     if ((parsed = optionValue(args, index, '--path'))) {
+      if (captureId) throw new Error('--path cannot override a defined capture; create a separate capture definition');
       options.path = parsed.value;
     } else if ((parsed = optionValue(args, index, '--output'))) {
       options.output = parsed.value;
@@ -126,7 +130,7 @@ function parseCaptureArgs(args, captures) {
 
   if (options.path === undefined && base.path === undefined) throw new Error('ad-hoc capture requires --path');
   if (options.output === undefined && base.output === undefined) throw new Error('ad-hoc capture requires --output');
-  return { capture: base, options };
+  return { capture: assertCapturePrivacy(base, captureId ? `capture ${captureId}` : 'ad-hoc capture'), options };
 }
 
 async function validateSites(siteId) {
@@ -138,9 +142,9 @@ async function validateSites(siteId) {
   }
 }
 
-async function commandVersion(command, args) {
+async function commandVersion(command, args, env = process.env) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -152,17 +156,20 @@ async function commandVersion(command, args) {
 }
 
 async function doctor() {
+  const fontEnv = await verifiedBrowserFontEnvironment(process.env);
   const checks = [
-    ['Google Chrome', 'google-chrome', ['--version']],
-    ['ImageMagick', process.env.BROWSER_AGENT_MAGICK || 'magick', ['-version']],
+    ['Google Chrome', 'google-chrome', ['--version'], null, process.env],
+    ['ImageMagick', process.env.BROWSER_AGENT_MAGICK || 'magick', ['-version'], null, process.env],
+    ['Japanese sans-serif font', 'fc-match', ['-f', '%{family}|%{file}', 'sans-serif:lang=ja'], /Noto Sans JP.*NotoSansJP-Variable\.ttf/, fontEnv],
+    ['English sans-serif font', 'fc-match', ['-f', '%{family}|%{file}', 'sans-serif:lang=en'], /Inter Variable.*InterVariable\.ttf/, fontEnv],
   ];
   let failed = false;
-  for (const [label, command, args] of checks) {
-    const version = await commandVersion(command, args);
-    if (version) console.log(`ok  ${label}: ${version}`);
+  for (const [label, command, args, expected, env] of checks) {
+    const version = await commandVersion(command, args, env);
+    if (version && (!expected || expected.test(version))) console.log(`ok  ${label}: ${version}`);
     else {
       failed = true;
-      console.log(`missing  ${label}: ${command}`);
+      console.log(`missing  ${label}: ${version ?? command}`);
     }
   }
   if (failed) throw new Error('required runtime dependencies are missing');

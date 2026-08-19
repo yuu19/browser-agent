@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "fonts": [
+    {
+      "family": "Noto Sans JP",
+      "file": "NotoSansJP-Variable.ttf",
+      "sourceRepository": "https://github.com/google/fonts",
+      "sourceRevision": "e1118da94a8cb00cf6d06cdac9ef13eb1e5c6ab7",
+      "sourcePath": "ofl/notosansjp/NotoSansJP[wght].ttf",
+      "downloadUrl": "https://raw.githubusercontent.com/google/fonts/e1118da94a8cb00cf6d06cdac9ef13eb1e5c6ab7/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf",
+      "sha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+      "license": "SIL Open Font License 1.1",
+      "licenseFile": "OFL-NotoSansJP.txt"
+    },
+    {
+      "family": "Inter Variable",
+      "file": "InterVariable.ttf",
+      "sourceRepository": "https://github.com/rsms/inter",
+      "sourceRevision": "v4.1",
+      "sourcePath": "docs/font-files/InterVariable.ttf",
+      "downloadUrl": "https://raw.githubusercontent.com/rsms/inter/v4.1/docs/font-files/InterVariable.ttf",
+      "sha256": "4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf",
+      "license": "SIL Open Font License 1.1",
+      "licenseFile": "OFL-Inter.txt"
+    }
+  ]
+}

@@ -8,19 +8,20 @@
 
 - Node.js 20以上
 - Google Chrome Stable (`google-chrome`)
-- ImageMagick (`magick`、注釈を描画する場合)
-- Noto CJKとInter（日本語・英語のフォールバック表示）
+- ImageMagick (`magick`)
+- fontconfig (`fc-match`)
 
 セットアップ:
 
 ```bash
 npm install
+node scripts/fetch-fonts.js
 npm link
 browser-agent doctor
 browser-agent validate
 ```
 
-Playwright CLIとPlaywright Libraryは`package-lock.json`で固定します。グローバルに導入済みの`playwright-cli`には依存しません。
+Playwright CLIとPlaywright Libraryは`package-lock.json`で固定します。グローバルに導入済みの`playwright-cli`には依存しません。日本語・英語のフォールバックフォントも、リポジトリ内のTTFとSHA-256で固定します。
 
 Chromeのフォント構成、導入手順、確認方法は[Chromeの日本語・英語フォント](docs/chrome-fonts.md)を参照してください。
 今回導入したパッケージ、追加設定、実行状態、再現手順は[セットアップ記録](docs/setup-record.md)にまとめています。
@@ -29,6 +30,8 @@ Chromeのフォント構成、導入手順、確認方法は[Chromeの日本語�
 
 ```text
 browser-agent/
+├── assets/fonts/                # 固定TTF、OFL、取得元とSHA-256
+├── config/fontconfig/           # Chrome専用のフォールバック設定
 ├── sites/<site>/site.json
 ├── sites/<site>/captures.json
 ├── bin/browser-agent.js
@@ -37,7 +40,8 @@ browser-agent/
 ~/.local/share/browser-agent/     # Git管理しない
 ├── profiles/
 ├── auth/
-└── runtime/
+├── runtime/
+└── fontconfig/                   # 専用設定・キャッシュ領域
 ```
 
 ランタイムデータの場所は`BROWSER_AGENT_DATA_DIR`、サイト定義の場所は`BROWSER_AGENT_SITES_DIR`で変更できます。
@@ -102,9 +106,10 @@ browser-agent login save example
 browser-agent browser example open
 browser-agent browser example snapshot
 browser-agent browser example click e3
-browser-agent browser example screenshot --filename=docs/images/check.png
 browser-agent browser example close
 ```
+
+完成画像は、後述する`browser-agent capture`で生成します。対話操作中の`screenshot`と`pdf`は、機密情報のマスク検査を通らないため実行できません。
 
 `state`方式ではプロジェクトごとに独立したnamed sessionを使用します。明示する場合は次のように指定します。
 
@@ -127,9 +132,16 @@ browser-agent unlock example
   "user-list": {
     "path": "/users",
     "output": "docs/images/users.png",
+    "privacy": "masked",
     "fullPage": false,
     "waitMs": 500,
     "maskColor": "#1f2937",
+    "readiness": {
+      "fonts": true,
+      "images": true,
+      "timeoutMs": 10000,
+      "ignoreImages": []
+    },
     "prepare": [
       {
         "action": "click",
@@ -155,6 +167,12 @@ browser-agent unlock example
   }
 }
 ```
+
+### 公開範囲
+
+ログイン済み画面は、既定で`masked`として扱います。`masked`の撮影には、少なくとも1件の必須マスクが必要です。
+
+公開情報だけを表示する画面では、撮影定義へ`"privacy": "public"`を明示できます。この指定は、画面に認証情報、個人情報、非公開の識別子や数値が含まれないことを確認した場合にだけ使用します。
 
 ### locator
 
@@ -191,6 +209,12 @@ browser-agent unlock example
 
 `fill`、`type`、`upload`、任意JavaScriptはcapture定義では実行できません。クリックは画面を変更し得るため、定義追加時に保存・削除操作でないことをレビューしてください。
 
+### 読み込み完了の検査
+
+撮影前にWebフォントと表示対象画像の読み込み完了を確認します。表示対象画像が壊れている場合は、完成画像を保存しません。
+
+外部サービス側の仕様により意図的に読み込めない画像だけは、`readiness.ignoreImages`へ構造化locatorと一致件数を指定して除外できます。除外は画像ごとにレビューし、広いCSS selectorで一括除外しないでください。
+
 ## 撮影
 
 呼び出し元プロジェクトで実行します。出力はそのディレクトリ配下の相対パスに限定されます。
@@ -200,7 +224,7 @@ cd ~/projects/project-a
 browser-agent capture example home
 ```
 
-単発撮影または一部上書きもできます。
+単発撮影もできます。単発撮影では、撮影先と少なくとも1件の必須マスクを指定します。
 
 ```bash
 browser-agent capture example \
@@ -210,14 +234,18 @@ browser-agent capture example \
   --annotation='{"locator":{"type":"role","role":"button","name":"保存"},"match":"one"}'
 ```
 
+定義済み撮影では`--output`、表示モード、全画面撮影、待機時間、マスクや注釈の追加を上書きできます。`--path`は変更できません。別画面を撮影する場合は、その画面専用の撮影定義とマスクを追加してください。
+
 主な上書きオプションは`browser-agent --help`で確認できます。
 
 ## 安全上の注意
 
 - PNGには撮影時マスクを適用しますが、Playwrightのsnapshotやブラウザ画面を操作するエージェントから値を隠す機能ではありません。エージェントにも見せられない情報には、専用テストアカウントやダミーデータを使ってください。
+- ファイルとして残す画像は`capture`で生成します。`browser`の`screenshot`と`pdf`は使用できません。
 - `storage-state.json`やprofileをGitへ追加しないでください。
 - 加工前の未マスク画像は作成しません。マスク済みの一時PNGも処理終了時に削除します。
 - 既存の完成PNGは、撮影・注釈がすべて成功した後だけ原子的に置き換えます。
+- 完成PNGは、注釈の有無にかかわらず不透明な8-bit sRGB RGBへ正規化します。
 
 設計上の判断と責務は[docs/implementation-plan.md](docs/implementation-plan.md)にまとめています。
 
@@ -229,3 +257,5 @@ npm run test:integration
 ```
 
 通常のテストは設定、パス境界、ロック、原子的な書き込みを検証します。統合テストは実際のGoogle ChromeとImageMagickを起動し、撮影画像のマスク色・注釈色と、必須マスク失敗時に既存画像を保持することを検証します。
+
+GitHub Actionsでは`npm run verify`と全サイト設定の検証を実行します。実ChromeとImageMagickを使う統合テストは、上記の`npm run test:integration`で確認します。

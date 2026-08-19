@@ -55,6 +55,38 @@ test('capture normalizes structured locators and match policies', () => {
   assert.equal(capture.masks[1].required, false);
 });
 
+test('capture requires a required mask unless the page is explicitly public', () => {
+  assert.throws(
+    () => validateCapture({ path: '/', output: 'shot.png' }, 'private'),
+    /masked captures require at least one required mask/,
+  );
+  const capture = validateCapture({
+    path: '/',
+    output: 'shot.png',
+    privacy: 'public',
+  }, 'public');
+  assert.equal(capture.privacy, 'public');
+});
+
+test('capture normalizes strict readiness checks and reviewed image exceptions', () => {
+  const capture = validateCapture({
+    path: '/',
+    output: 'shot.png',
+    privacy: 'public',
+    readiness: {
+      timeoutMs: 2_000,
+      ignoreImages: [{
+        locator: { type: 'testId', value: 'optional-image' },
+        match: 'one',
+      }],
+    },
+  }, 'public');
+  assert.equal(capture.readiness.fonts, true);
+  assert.equal(capture.readiness.images, true);
+  assert.equal(capture.readiness.timeoutMs, 2_000);
+  assert.deepEqual(capture.readiness.ignoreImages[0].match, { kind: 'one' });
+});
+
 test('capture rejects arbitrary preparation actions and unknown fields', () => {
   assert.throws(
     () => validateCapture({

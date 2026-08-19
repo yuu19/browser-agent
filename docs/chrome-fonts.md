@@ -1,83 +1,77 @@
 # Chromeの日本語・英語フォント
 
-ChromeとPlaywrightで取得する画面では、日本語をNoto CJK、英語をInterで表示します。
-Webサイトが独自のWebフォントを配信している場合は、そのフォントが優先されます。
-独自フォントを読み込めない場合や、指定フォントに文字がない場合に、この設定がフォールバックとして使われます。
+Chromeでサイト固有のWebフォントを読み込める場合は、そのフォントを表示します。Webフォントがない場合や、指定フォントに対象文字がない場合だけ、リポジトリ内の固定フォントを使います。
 
-## 現在の状態
+撮影時にフォントをダウンロードしません。固定フォントがない場合や内容が変わっている場合は、Chromeを起動する前に停止します。
 
-2026年8月15日に、WSLのUbuntuへ次のフォントを導入しました。
+## 固定するフォールバック
 
-| 用途 | パッケージ | 導入バージョン |
+| 表示対象 | フォント | 固定元 |
 |---|---|---|
-| 日本語のゴシック体・明朝体 | `fonts-noto-cjk` | `1:20230817+repack1-3` |
-| 英語のUIフォント | `fonts-inter` | `4.0+ds-1` |
-| カラー絵文字 | `fonts-noto-color-emoji` | `2.047-0ubuntu0.24.04.1` |
+| 日本語のゴシック体 | Noto Sans JP Variable | Google Fontsの固定コミット |
+| 英語のゴシック体 | Inter Variable 4.1 | Interの公式タグ`v4.1` |
 
-実際のフォールバックは次のとおりです。
+フォント本体、ライセンス、取得元、SHA-256は[フォント資産](../assets/fonts/)で管理します。正確なURLとハッシュは[SOURCE.json](../assets/fonts/SOURCE.json)が正本です。
 
-| 表示対象 | 割り当て |
-|---|---|
-| 日本語のゴシック体 | Noto Sans CJK JP |
-| 英語のゴシック体 | Inter |
-| 日本語の明朝体 | Noto Serif CJK JP |
-| 日本語の等幅フォント | Noto Sans Mono CJK JP |
+明朝体、等幅フォント、カラー絵文字は固定対象ではありません。サイトがWebフォントを配信しない場合は、実行環境のシステムフォントへフォールバックします。
 
-## 新しい環境への導入
+## セットアップ
 
-フォントをインストールします。
+通常は検証済みフォントがリポジトリに含まれています。次のコマンドは内容を確認し、不足しているファイルだけを固定URLから取得します。
 
 ```bash
-sudo apt-get install -y fonts-noto-cjk fonts-inter
+npm run fonts:fetch
 ```
 
-リポジトリで管理しているフォールバック設定を、ユーザー用fontconfigへ配置します。
+既存ファイルのハッシュが異なる場合は、自動で上書きしません。差分を確認したうえで、正しい固定配布物へ戻す場合だけ次を実行します。
 
 ```bash
-mkdir -p ~/.config/fontconfig/conf.d
-cp config/fontconfig/browser-agent-fonts.conf \
-  ~/.config/fontconfig/conf.d/50-browser-agent-fonts.conf
-fc-cache -f
+node scripts/fetch-fonts.js --force
 ```
 
-フォントキャッシュの更新後、起動中のChromeをすべて正常終了します。
-次に起動したChromeから新しい割り当てが使われます。
+撮影時にネットワーク取得は行いません。新しいフォント版へ更新するときは、取得元、SHA-256、ライセンス、実Chrome統合テストを同じ変更で更新します。
+
+## 実行時の適用
+
+`capture`、`login open`、`browser open`は、Chrome起動前にTTFのSHA-256を検証します。検証後、専用fontconfigをChromeプロセスだけに適用します。
+
+サイト固有のWebフォントは置き換えません。`sans-serif`と`system-ui`、およびChromeが英語の既定名として使うArial・Helvetica系の未導入フォントだけを固定フォールバックへ解決します。
+
+実装上の正本:
+
+- [フォント検証](../src/fonts.js)
+- [fontconfig設定](../config/fontconfig/browser-agent-fonts.conf)
+- [取得スクリプト](../scripts/fetch-fonts.js)
+
+専用fontconfigの設定とキャッシュは、既定では次に置きます。Chromeプロファイルや認証stateとは分離します。
+
+```text
+~/.local/share/browser-agent/fontconfig/
+├── config/
+└── cache/
+```
+
+`BROWSER_AGENT_DATA_DIR`を指定した場合は、そのディレクトリ配下へ移動します。ユーザー全体の`~/.config/fontconfig`は変更しません。
 
 ## 確認方法
 
-次のコマンドで、用途ごとの割り当てを確認できます。
+フォント本体のハッシュだけを確認します。
 
 ```bash
-fc-match 'sans-serif:lang=ja'
-fc-match 'sans-serif:lang=en'
-fc-match 'system-ui:lang=ja'
-fc-match 'system-ui:lang=en'
-fc-match 'serif:lang=ja'
-fc-match 'monospace:lang=ja'
+npm run fonts:check
 ```
 
-期待する結果は次のとおりです。
+Chrome、ImageMagick、fontconfigの実際の選択をまとめて確認します。
+
+```bash
+browser-agent doctor
+```
+
+期待するフォールバックは次のとおりです。
 
 ```text
-Noto Sans CJK JP
-Inter
-Noto Sans CJK JP
-Inter
-Noto Serif CJK JP
-Noto Sans Mono CJK JP
+Japanese sans-serif font: Noto Sans JP .../assets/fonts/NotoSansJP-Variable.ttf
+English sans-serif font: Inter Variable .../assets/fonts/InterVariable.ttf
 ```
 
-## 設定の管理
-
-正本は[fontconfig設定](../config/fontconfig/browser-agent-fonts.conf)です。
-実行環境では、次の場所へコピーして使用します。
-
-```text
-~/.config/fontconfig/conf.d/50-browser-agent-fonts.conf
-```
-
-正本を変更した場合は、もう一度コピーして`fc-cache -f`を実行します。
-Chromeを再起動するまで、起動済みのブラウザには変更が反映されません。
-
-`fonts-noto-cjk-extra`は導入していません。
-標準パッケージに含まれない追加ウェイトが必要になった場合だけ導入します。
+実Chrome統合テストでは、DevToolsの実使用フォント情報を読み取り、日本語と英語がそれぞれ固定TTFへ解決されたことを確認します。

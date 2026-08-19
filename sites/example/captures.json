@@ -2,6 +2,7 @@
   "home": {
     "path": "/",
     "output": "docs/images/example-home.png",
+    "privacy": "public",
     "fullPage": false,
     "waitMs": 500,
     "maskColor": "#1f2937",
