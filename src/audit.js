@@ -1,13 +1,14 @@
-import { randomUUID } from 'node:crypto';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { temporarySibling } from './paths.js';
 import {
   acquireLock,
   archiveRuntimeFile,
+  createLockOwner,
   ensurePrivateDirectory,
   processIsAlive,
   readLock,
+  reclaimLock,
   releaseLock,
 } from './runtime.js';
 
@@ -20,52 +21,76 @@ function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function reclaimAuditLock(paths, lockPath) {
+function busyError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+async function acquireRecoveryLock(paths, hooks) {
   const recoveryPath = join(paths.runtime, 'audit-recovery.lock');
-  const recoveryOwner = `audit-recovery:${process.pid}:${randomUUID()}`;
+  const recoveryOwner = createLockOwner('audit-recovery');
   try {
     await acquireLock(recoveryPath, recoveryOwner);
   } catch (error) {
-    if (error.code === 'LOCK_HELD') return false;
-    throw error;
-  }
-  try {
-    let lock;
+    if (error.code !== 'LOCK_HELD') throw error;
+    const reclaimed = await reclaimLock(
+      recoveryPath,
+      paths.archive,
+      'stale-audit-recovery-lock',
+      async (current) => {
+        if (processIsAlive(current.pid)) {
+          throw busyError('RECOVERY_BUSY', 'audit recovery is owned by a live process');
+        }
+      },
+      hooks?.recoveryReclaim,
+    ).catch((reclaimError) => {
+      if (reclaimError.code === 'RECOVERY_BUSY') return false;
+      throw reclaimError;
+    });
+    if (!reclaimed) return null;
     try {
-      lock = await readLock(lockPath);
-    } catch {
-      await archiveRuntimeFile(lockPath, paths.archive, 'damaged-audit-lock');
-      return true;
+      await acquireLock(recoveryPath, recoveryOwner);
+    } catch (retryError) {
+      if (retryError.code === 'LOCK_HELD') return null;
+      throw retryError;
     }
-    if (lock && !processIsAlive(lock.pid)) {
-      await archiveRuntimeFile(lockPath, paths.archive, 'stale-audit-lock');
-      return true;
-    }
-    return false;
+  }
+  return { path: recoveryPath, owner: recoveryOwner };
+}
+
+export async function reclaimAuditLock(paths, lockPath, { hooks } = {}) {
+  const recoveryLock = await acquireRecoveryLock(paths, hooks);
+  if (!recoveryLock) return false;
+  try {
+    await hooks?.afterRecoveryAcquired?.(recoveryLock);
+    return reclaimLock(lockPath, paths.archive, 'stale-audit-lock', async (lock) => {
+      if (processIsAlive(lock.pid)) {
+        throw busyError('AUDIT_OWNER_LIVE', 'audit is owned by a live process');
+      }
+    }, hooks?.auditReclaim).catch((error) => {
+      if (error.code === 'AUDIT_OWNER_LIVE') return false;
+      throw error;
+    });
   } finally {
-    await releaseLock(recoveryPath, recoveryOwner);
+    await releaseLock(recoveryLock.path, recoveryLock.owner);
   }
 }
 
-async function acquireAuditLock(paths, owner) {
+async function acquireAuditLock(paths, owner, options) {
   const lockPath = join(paths.runtime, 'audit.lock');
-  const deadline = Date.now() + AUDIT_LOCK_TIMEOUT_MS;
+  const deadline = Date.now() + (options.lockTimeoutMs ?? AUDIT_LOCK_TIMEOUT_MS);
+  const retryMs = options.lockRetryMs ?? AUDIT_LOCK_RETRY_MS;
   while (Date.now() < deadline) {
     try {
       await acquireLock(lockPath, owner);
       return lockPath;
     } catch (error) {
       if (error.code !== 'LOCK_HELD') throw error;
-      let needsRecovery = false;
-      try {
-        const lock = await readLock(lockPath);
-        if (!lock) continue;
-        needsRecovery = !processIsAlive(lock.pid);
-      } catch {
-        needsRecovery = true;
-      }
-      if (needsRecovery && await reclaimAuditLock(paths, lockPath)) continue;
-      await delay(AUDIT_LOCK_RETRY_MS);
+      const lock = await readLock(lockPath);
+      if (!lock) continue;
+      if (!processIsAlive(lock.pid) && await reclaimAuditLock(paths, lockPath, options)) continue;
+      await delay(retryMs);
     }
   }
   const error = new Error('site audit log is busy');
@@ -73,9 +98,9 @@ async function acquireAuditLock(paths, owner) {
   throw error;
 }
 
-export async function appendAudit(paths, record) {
-  const owner = `audit:${process.pid}:${randomUUID()}`;
-  const lockPath = await acquireAuditLock(paths, owner);
+export async function appendAudit(paths, record, options = {}) {
+  const owner = createLockOwner('audit');
+  const lockPath = await acquireAuditLock(paths, owner, options);
   try {
     let records = [];
     try {
