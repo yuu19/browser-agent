@@ -1,6 +1,18 @@
+import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { access, chmod, link, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  access,
+  chmod,
+  link,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { temporarySibling } from './paths.js';
 
@@ -35,14 +47,106 @@ export async function writeJsonAtomic(path, value, mode = 0o600) {
   }
 }
 
+export function createLockOwner(label) {
+  if (typeof label !== 'string' || label.length === 0) throw new Error('lock owner label is required');
+  return `${label}:${process.pid}:${randomUUID()}`;
+}
+
+async function withLockGuard(path, callback) {
+  await ensurePrivateDirectory(dirname(path));
+  const guardPath = `${path}.guard`;
+  await writeFile(guardPath, '', { flag: 'a', mode: 0o600 });
+  await chmod(guardPath, 0o600);
+
+  const child = spawn('/usr/bin/flock', [
+    '--exclusive',
+    guardPath,
+    '/bin/sh',
+    '-c',
+    'printf "LOCK_GUARD_READY\\n"; cat >/dev/null',
+  ], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const childExited = new Promise((resolveExit) => child.once('exit', resolveExit));
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-4_096); });
+
+  await new Promise((resolveReady, rejectReady) => {
+    let stdout = '';
+    let ready = false;
+    const fail = (error) => {
+      if (ready) return;
+      rejectReady(error);
+    };
+    child.once('error', fail);
+    child.once('exit', (code, signal) => {
+      fail(new Error(`lock guard exited before acquisition (${code ?? signal}): ${stderr.trim()}`));
+    });
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      if (ready) return;
+      stdout += chunk;
+      if (stdout.includes('LOCK_GUARD_READY\n')) {
+        ready = true;
+        resolveReady();
+      }
+    });
+  });
+
+  try {
+    return await callback();
+  } finally {
+    child.stdin.end();
+    await childExited;
+  }
+}
+
+function validateLockValue(value) {
+  if (!value
+    || typeof value !== 'object'
+    || Array.isArray(value)
+    || typeof value.owner !== 'string'
+    || value.owner.length === 0
+    || !Number.isInteger(value.pid)
+    || value.pid <= 0
+    || typeof value.createdAt !== 'string'
+    || !Number.isFinite(Date.parse(value.createdAt))) {
+    throw new Error('invalid lock');
+  }
+}
+
+async function readLockSnapshot(path) {
+  let handle;
+  try {
+    handle = await open(path, 'r');
+    const [contents, info] = await Promise.all([handle.readFile('utf8'), handle.stat()]);
+    const value = JSON.parse(contents);
+    validateLockValue(value);
+    return { value, dev: info.dev, ino: info.ino };
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw new Error(`cannot verify damaged lock file: ${path}`);
+  } finally {
+    await handle?.close();
+  }
+}
+
+function sameLock(left, right) {
+  return left !== null
+    && right !== null
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.value.owner === right.value.owner;
+}
+
 export async function acquireLock(path, owner, metadata = {}) {
   await ensurePrivateDirectory(dirname(path));
   const value = { ...metadata, owner, pid: process.pid, createdAt: new Date().toISOString() };
   const temporary = temporarySibling(path, '.lock');
   try {
     await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-    // Publish a complete inode atomically; readers must never observe a partially written lock.
+    // link(2) publishes only when the path is absent; it never replaces an existing owner.
     await link(temporary, path);
+    return value;
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;
     let current = 'unknown owner';
@@ -60,25 +164,7 @@ export async function acquireLock(path, owner, metadata = {}) {
 }
 
 export async function readLock(path) {
-  if (!(await exists(path))) return null;
-  try {
-    const value = JSON.parse(await readFile(path, 'utf8'));
-    if (!value
-      || typeof value !== 'object'
-      || Array.isArray(value)
-      || typeof value.owner !== 'string'
-      || value.owner.length === 0
-      || !Number.isInteger(value.pid)
-      || value.pid <= 0
-      || typeof value.createdAt !== 'string'
-      || !Number.isFinite(Date.parse(value.createdAt))) {
-      throw new Error('invalid lock');
-    }
-    return value;
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    throw new Error(`cannot verify damaged lock file: ${path}`);
-  }
+  return (await readLockSnapshot(path))?.value ?? null;
 }
 
 export function processIsAlive(pid) {
@@ -102,20 +188,36 @@ export async function archiveRuntimeFile(path, archiveRoot, reason) {
   return destination;
 }
 
+export async function reclaimLock(path, archiveRoot, reason, validate, hooks = {}) {
+  const candidate = await readLockSnapshot(path);
+  if (!candidate) return false;
+  await validate(candidate.value);
+  await hooks.afterValidation?.(candidate.value);
+  await hooks.beforeGuard?.(candidate.value);
+
+  return withLockGuard(path, async () => {
+    const current = await readLockSnapshot(path);
+    if (!sameLock(candidate, current)) return false;
+    await hooks.beforeArchive?.(candidate.value);
+    await ensurePrivateDirectory(archiveRoot);
+    const stamp = new Date().toISOString().replaceAll(':', '-');
+    const destination = join(archiveRoot, `${stamp}-${reason}-${randomUUID()}-${basename(path)}`);
+    await rename(path, destination);
+    return true;
+  });
+}
+
 export async function releaseLock(path, expectedOwner) {
-  if (!(await exists(path))) return;
-  if (expectedOwner) {
-    try {
-      const current = JSON.parse(await readFile(path, 'utf8'));
-      if (current.owner !== expectedOwner) {
-        throw new Error(`refusing to release a lock owned by ${current.owner}`);
-      }
-    } catch (error) {
-      if (error instanceof SyntaxError) throw new Error(`cannot verify damaged lock file: ${path}`);
-      throw error;
+  await withLockGuard(path, async () => {
+    const candidate = await readLockSnapshot(path);
+    if (!candidate) return;
+    if (expectedOwner && candidate.value.owner !== expectedOwner) {
+      throw new Error(`refusing to release a lock owned by ${candidate.value.owner}`);
     }
-  }
-  await rm(path, { force: true });
+    const current = await readLockSnapshot(path);
+    if (!sameLock(candidate, current)) throw new Error(`refusing to release a replaced lock: ${path}`);
+    await rm(path);
+  });
 }
 
 export async function replaceFileAtomic(temporary, output) {

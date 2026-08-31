@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  acquireCommandLock,
+  acquireSiteLock,
   managedSessionName,
   normalizeBrowserCommand,
   runBrowserCommand,
@@ -11,7 +13,39 @@ import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { siteRuntimePaths } from '../src/paths.js';
-import { exists } from '../src/runtime.js';
+import {
+  acquireLock,
+  createLockOwner,
+  exists,
+  processIsAlive,
+  readLock,
+  reclaimLock,
+  releaseLock,
+  writeJsonAtomic,
+} from '../src/runtime.js';
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function competingReclaimerHooks() {
+  const bothValidated = deferred();
+  const allowSlow = deferred();
+  let validationCount = 0;
+  const afterValidation = async () => {
+    validationCount += 1;
+    if (validationCount === 2) bothValidated.resolve();
+    await bothValidated.promise;
+  };
+  return {
+    bothValidated,
+    allowSlow,
+    fast: { afterValidation },
+    slow: { afterValidation, beforeGuard: () => allowSlow.promise },
+  };
+}
 
 const site = {
   id: 'example',
@@ -176,6 +210,92 @@ test('unlock archives only a verified stale lock and refuses an active owner', a
   }));
   await assert.rejects(unlockSite({ id: 'example' }, env), /RUNTIME_ACTIVE/);
   assert.equal(await exists(paths.lock), true);
+});
+
+test('site lock acquisition does not reclaim a competing replacement owner', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'browser-agent-site-lock-race-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const env = { ...process.env, BROWSER_AGENT_DATA_DIR: root, XDG_RUNTIME_DIR: root };
+  const paths = siteRuntimePaths('example', env);
+  const verifyInactive = async () => {};
+
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    await writeJsonAtomic(paths.lock, {
+      owner: createLockOwner('site:stale'),
+      pid: 2_147_483_647,
+      createdAt: new Date().toISOString(),
+    });
+    const hooks = competingReclaimerHooks();
+    const fastOwner = createLockOwner('site:fast');
+    const slowOwner = createLockOwner('site:slow');
+    const fast = acquireSiteLock(paths, fastOwner, {}, env, { hooks: hooks.fast, verifyInactive });
+    const slow = acquireSiteLock(paths, slowOwner, {}, env, { hooks: hooks.slow, verifyInactive });
+    await hooks.bothValidated.promise;
+    await fast;
+    hooks.allowSlow.resolve();
+    await assert.rejects(slow, /RUNTIME_ACTIVE/);
+    assert.equal((await readLock(paths.lock)).owner, fastOwner);
+    await releaseLock(paths.lock, fastOwner);
+  }
+});
+
+test('command lock acquisition does not reclaim a competing replacement owner', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'browser-agent-command-lock-race-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const env = { ...process.env, BROWSER_AGENT_DATA_DIR: root, XDG_RUNTIME_DIR: root };
+  const paths = siteRuntimePaths('example', env);
+  const name = managedSessionName('example', 'command-race');
+  const lockPath = join(paths.commandLocks, `${name}.json`);
+
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    await writeJsonAtomic(lockPath, {
+      owner: createLockOwner('command:stale'),
+      pid: 2_147_483_647,
+      createdAt: new Date().toISOString(),
+    });
+    const hooks = competingReclaimerHooks();
+    const fast = acquireCommandLock(paths, name, { hooks: hooks.fast });
+    const slow = acquireCommandLock(paths, name, { hooks: hooks.slow });
+    await hooks.bothValidated.promise;
+    const acquired = await fast;
+    hooks.allowSlow.resolve();
+    await assert.rejects(slow, /SESSION_BUSY/);
+    assert.equal((await readLock(lockPath)).owner, acquired.owner);
+    await releaseLock(acquired.path, acquired.owner);
+  }
+});
+
+test('unlock does not archive a live lock installed after stale validation', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'browser-agent-unlock-race-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const env = { ...process.env, BROWSER_AGENT_DATA_DIR: root, XDG_RUNTIME_DIR: root };
+  const paths = siteRuntimePaths('example', env);
+  await mkdir(paths.profile, { recursive: true });
+  const staleOwner = createLockOwner('unlock:stale');
+  await writeJsonAtomic(paths.lock, {
+    owner: staleOwner,
+    pid: 2_147_483_647,
+    createdAt: new Date().toISOString(),
+  });
+  const validated = deferred();
+  const continueUnlock = deferred();
+  const unlock = unlockSite({ id: 'example' }, env, {
+    lockHooks: {
+      afterValidation: () => validated.resolve(),
+      beforeGuard: () => continueUnlock.promise,
+    },
+  });
+  await validated.promise;
+  assert.equal(await reclaimLock(paths.lock, paths.archive, 'test-stale', async (metadata) => {
+    assert.equal(metadata.owner, staleOwner);
+    assert.equal(processIsAlive(metadata.pid), false);
+  }), true);
+  const liveOwner = createLockOwner('unlock:live');
+  await acquireLock(paths.lock, liveOwner);
+  continueUnlock.resolve();
+  assert.equal(await unlock, 0);
+  assert.equal((await readLock(paths.lock)).owner, liveOwner);
+  await releaseLock(paths.lock, liveOwner);
 });
 
 test('unlock refuses damaged locks and session paths outside managed runtime roots', async (t) => {

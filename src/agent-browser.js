@@ -32,10 +32,12 @@ import { cloneProfile, removeWorkingProfile } from './profile-workspace.js';
 import {
   acquireLock,
   archiveRuntimeFile,
+  createLockOwner,
   ensurePrivateDirectory,
   exists,
   processIsAlive,
   readLock,
+  reclaimLock,
   releaseLock,
   writeJsonAtomic,
 } from './runtime.js';
@@ -514,33 +516,67 @@ async function assertRuntimeInactive(metadata, paths, env) {
   }
 }
 
-async function reclaimSiteLock(paths, env) {
-  const metadata = await readLock(paths.lock);
-  if (!metadata) return false;
-  assertManagedProfilePath(metadata.profilePath, paths);
-  if (processIsAlive(metadata.pid)) throw new BrowserAgentError('RUNTIME_ACTIVE', 'the site profile owner is still running');
-  const candidates = metadata.profilePath ? [metadata.profilePath] : [paths.profile, paths.loginProfile];
-  for (const profilePath of candidates) {
-    await assertRuntimeInactive({ ...metadata, profilePath }, paths, env);
+async function reclaimSiteLock(paths, env, { expectedOwner, hooks, verifyInactive } = {}) {
+  return reclaimLock(paths.lock, paths.archive, 'stale-lock', async (metadata) => {
+    if (expectedOwner && metadata.owner !== expectedOwner) {
+      throw new BrowserAgentError('RUNTIME_ACTIVE', 'the site lock belongs to a different lifecycle');
+    }
+    assertManagedProfilePath(metadata.profilePath, paths);
+    if (processIsAlive(metadata.pid)) throw new BrowserAgentError('RUNTIME_ACTIVE', 'the site profile owner is still running');
+    if (verifyInactive) {
+      await verifyInactive(metadata);
+      return;
+    }
+    const candidates = metadata.profilePath ? [metadata.profilePath] : [paths.profile, paths.loginProfile];
+    for (const profilePath of candidates) {
+      await assertRuntimeInactive({ ...metadata, profilePath }, paths, env);
+    }
+  }, hooks);
+}
+
+export async function acquireSiteLock(paths, owner, metadata, env, { hooks, verifyInactive } = {}) {
+  try {
+    await acquireLock(paths.lock, owner, metadata);
+    return;
+  } catch (error) {
+    if (error.code !== 'LOCK_HELD') throw error;
   }
-  await archiveRuntimeFile(paths.lock, paths.archive, 'stale-lock');
-  return true;
+  const reclaimed = await reclaimSiteLock(paths, env, { hooks, verifyInactive });
+  if (!reclaimed) {
+    throw new BrowserAgentError('RUNTIME_ACTIVE', 'the site profile lock changed during recovery');
+  }
+  try {
+    await acquireLock(paths.lock, owner, metadata);
+  } catch (error) {
+    if (error.code === 'LOCK_HELD') {
+      throw new BrowserAgentError('RUNTIME_ACTIVE', 'another site profile owner acquired the lock');
+    }
+    throw error;
+  }
 }
 
-async function acquireSiteLock(paths, owner, metadata, env) {
-  if (await exists(paths.lock)) await reclaimSiteLock(paths, env);
-  await acquireLock(paths.lock, owner, metadata);
-}
-
-async function acquireCommandLock(paths, name) {
+export async function acquireCommandLock(paths, name, { hooks } = {}) {
   const path = join(paths.commandLocks, `${name}.json`);
-  if (await exists(path)) {
-    const current = await readLock(path);
-    if (processIsAlive(current.pid)) throw new BrowserAgentError('SESSION_BUSY', 'another command is already running for this session');
-    await archiveRuntimeFile(path, paths.archive, 'stale-command-lock');
+  const owner = createLockOwner(`command:${name}`);
+  try {
+    await acquireLock(path, owner);
+    return { path, owner };
+  } catch (error) {
+    if (error.code !== 'LOCK_HELD') throw error;
   }
-  await acquireLock(path, `command:${name}`);
-  return path;
+  const reclaimed = await reclaimLock(path, paths.archive, 'stale-command-lock', async (current) => {
+    if (processIsAlive(current.pid)) throw new BrowserAgentError('SESSION_BUSY', 'another command is already running for this session');
+  }, hooks);
+  if (!reclaimed) throw new BrowserAgentError('SESSION_BUSY', 'the command lock changed during recovery');
+  try {
+    await acquireLock(path, owner);
+    return { path, owner };
+  } catch (error) {
+    if (error.code === 'LOCK_HELD') {
+      throw new BrowserAgentError('SESSION_BUSY', 'another command acquired the session lock');
+    }
+    throw error;
+  }
 }
 
 async function writeManagedConfig(site, paths, metadata, env) {
@@ -742,7 +778,7 @@ async function reconcileSession(paths, metadataPath, env) {
   metadata.metadataPath = null;
   await removeSessionArtifacts(paths, metadata);
   if (metadata.siteLockOwner && await exists(paths.lock)) {
-    await archiveRuntimeFile(paths.lock, paths.archive, 'stale-lock');
+    await reclaimSiteLock(paths, env, { expectedOwner: metadata.siteLockOwner });
   }
   return true;
 }
@@ -784,7 +820,7 @@ async function prepareOperationSession(site, session, paths, env, { create }) {
     // Record ownership before creating resources so unlock can always discover an interrupted setup.
     await writeJsonAtomic(metadataPath, { ...metadata, metadataPath: undefined });
     if (site.authMode === 'profile') {
-      const owner = `profile-copy:${name}`;
+      const owner = createLockOwner(`profile-copy:${name}`);
       await acquireSiteLock(paths, owner, { profilePath: paths.profile }, env);
       try {
         await cloneProfile(paths.profile, workingProfile, paths.workingProfiles);
@@ -810,7 +846,7 @@ async function prepareOperationSession(site, session, paths, env, { create }) {
 export async function runBrowserCommand(site, session, commandArgs, env = process.env) {
   const paths = siteRuntimePaths(site.id, env);
   const name = managedSessionName(site.id, session);
-  const lockPath = await acquireCommandLock(paths, name);
+  const { path: lockPath, owner: commandLockOwner } = await acquireCommandLock(paths, name);
   let parsed = { action: 'unknown' };
   let metadata;
   let beforeOrigins = [];
@@ -861,7 +897,7 @@ export async function runBrowserCommand(site, session, commandArgs, env = proces
     }).catch(() => {});
     throw error;
   } finally {
-    await releaseLock(lockPath, `command:${name}`).catch(() => {});
+    await releaseLock(lockPath, commandLockOwner).catch(() => {});
   }
 }
 
@@ -874,7 +910,7 @@ async function prepareLogin(site, paths, env) {
     if (active.has(name)) throw new BrowserAgentError('RUNTIME_ACTIVE', 'a login session is already active');
     await reconcileSession(paths, metadataPath, env);
   }
-  const owner = `login:${site.id}`;
+  const owner = createLockOwner(`login:${site.id}`);
   const profilePath = site.authMode === 'profile' ? paths.profile : join(paths.workingProfiles, name);
   await acquireSiteLock(paths, owner, { sessionName: name, profilePath }, env);
   const metadata = {
@@ -955,7 +991,7 @@ export async function saveLogin(site, env = process.env) {
   const name = managedSessionName(site.id, 'login', 'login');
   const metadataPath = sessionMetadataPath(paths, name);
   if (!(await exists(metadataPath))) throw new BrowserAgentError('SESSION_NOT_OPEN', 'login open must run before login save');
-  const lockPath = await acquireCommandLock(paths, name);
+  const { path: lockPath, owner: commandLockOwner } = await acquireCommandLock(paths, name);
   const metadata = await readSessionMetadata(metadataPath, paths);
   const temporary = temporarySibling(paths.authState, '.storage-state.json');
   try {
@@ -970,7 +1006,7 @@ export async function saveLogin(site, env = process.env) {
     await closeSession(paths, metadata, env);
   } finally {
     await rm(temporary, { force: true });
-    await releaseLock(lockPath, `command:${name}`).catch(() => {});
+    await releaseLock(lockPath, commandLockOwner).catch(() => {});
   }
 }
 
@@ -979,16 +1015,16 @@ export async function closeLogin(site, env = process.env) {
   const name = managedSessionName(site.id, 'login', 'login');
   const metadataPath = sessionMetadataPath(paths, name);
   if (!(await exists(metadataPath))) throw new BrowserAgentError('SESSION_NOT_OPEN', 'no managed login session is open');
-  const lockPath = await acquireCommandLock(paths, name);
+  const { path: lockPath, owner: commandLockOwner } = await acquireCommandLock(paths, name);
   try {
     const metadata = await readSessionMetadata(metadataPath, paths);
     await closeSession(paths, metadata, env);
   } finally {
-    await releaseLock(lockPath, `command:${name}`).catch(() => {});
+    await releaseLock(lockPath, commandLockOwner).catch(() => {});
   }
 }
 
-export async function unlockSite(site, env = process.env) {
+export async function unlockSite(site, env = process.env, { lockHooks } = {}) {
   const paths = siteRuntimePaths(site.id, env);
   const sessions = [];
   try {
@@ -1028,8 +1064,7 @@ export async function unlockSite(site, env = process.env) {
     await removeSessionArtifacts(paths, metadata);
     archived += 1;
   }
-  if (siteLock) {
-    await archiveRuntimeFile(paths.lock, paths.archive, 'stale-lock');
+  if (siteLock && await reclaimSiteLock(paths, env, { hooks: lockHooks })) {
     archived += 1;
   }
   return archived;
@@ -1039,7 +1074,7 @@ export async function createManagedProfileCopy(site, purpose, env = process.env)
   if (!/^[a-z0-9_-]+$/.test(purpose)) throw policyError('profile copy purpose is invalid');
   const paths = siteRuntimePaths(site.id, env);
   const destination = temporarySibling(join(paths.workingProfiles, purpose), '.profile');
-  const owner = `profile-copy:${purpose}:${process.pid}`;
+  const owner = createLockOwner(`profile-copy:${purpose}`);
   await acquireSiteLock(paths, owner, { profilePath: paths.profile }, env);
   try {
     await cloneProfile(paths.profile, destination, paths.workingProfiles);
