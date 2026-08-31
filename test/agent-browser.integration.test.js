@@ -14,8 +14,15 @@ import {
 } from '../src/agent-browser.js';
 import { verifyAgentBrowserBinary } from '../src/agent-browser-binary.js';
 import { siteRuntimePaths } from '../src/paths.js';
+import { exists, readLock } from '../src/runtime.js';
 
 const integrationTest = process.env.BROWSER_AGENT_INTEGRATION === '1' ? test : test.skip;
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 function listen(server) {
   return new Promise((resolve, reject) => {
@@ -250,16 +257,106 @@ integrationTest('login save validates and atomically publishes state for later r
   const paths = siteRuntimePaths(site.id, env);
   try {
     await openLogin(site, env);
-    await saveLogin(site, env);
+    const cleanupReached = deferred();
+    const continueCleanup = deferred();
+    const saving = saveLogin(site, env, {
+      lifecycleHooks: {
+        beforeCleanup: async () => {
+          cleanupReached.resolve();
+          await continueCleanup.promise;
+        },
+      },
+    });
+    await cleanupReached.promise;
+    const name = managedSessionName(site.id, 'login', 'login');
+    const metadataPath = join(paths.sessions, `${name}.json`);
+    const configPath = join(paths.configs, `${name}.json`);
+    const workingProfile = join(paths.workingProfiles, name);
+    assert.equal(await exists(metadataPath), true);
+    assert.equal(await exists(configPath), true);
+    assert.equal(await exists(workingProfile), true);
+    assert.match((await readLock(paths.lock)).owner, /^login:login:/);
+    await assert.rejects(openLogin(site, env), /SESSION_BUSY/);
+    continueCleanup.resolve();
+    await saving;
+
     const state = JSON.parse(await readFile(paths.authState, 'utf8'));
     assert.ok(Array.isArray(state.cookies));
     assert.ok(Array.isArray(state.origins));
     assert.equal((await stat(paths.authState)).mode & 0o777, 0o600);
+    await openLogin(site, env);
+    assert.equal(await exists(metadataPath), true);
+    assert.equal(await exists(configPath), true);
+    assert.equal(await exists(workingProfile), true);
+    assert.match((await readLock(paths.lock)).owner, /^login:login:/);
+    await closeLogin(site, env);
     await runBrowserCommand(site, 'integration', ['open'], env);
     await runBrowserCommand(site, 'integration', ['close'], env);
   } finally {
     await closeLogin(site, env).catch(() => {});
     await runBrowserCommand(site, 'integration', ['close'], env).catch(() => {});
+    await closeServer(app);
+    await rm(paths.socketDirectory, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+integrationTest('profile login close serializes cleanup before the next open lifecycle', { timeout: 120_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'browser-agent-profile-login-lifecycle-'));
+  const app = createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    response.end('<!doctype html><title>profile login fixture</title><p id="ready">ready</p>');
+  });
+  const address = await listen(app);
+  const origin = `http://127.0.0.1:${address.port}`;
+  const env = { ...process.env, BROWSER_AGENT_DATA_DIR: root, XDG_RUNTIME_DIR: tmpdir() };
+  const site = {
+    id: 'profile-login',
+    baseUrl: `${origin}/`,
+    loginUrl: `${origin}/login`,
+    allowedOrigins: [origin],
+    authMode: 'profile',
+    browser: {
+      channel: 'chromium',
+      viewport: { width: 800, height: 600 },
+      deviceScaleFactor: 1,
+      locale: 'ja-JP',
+      captureHeaded: false,
+    },
+  };
+  const paths = siteRuntimePaths(site.id, env);
+  const name = managedSessionName(site.id, 'login', 'login');
+  const metadataPath = join(paths.sessions, `${name}.json`);
+  const configPath = join(paths.configs, `${name}.json`);
+  try {
+    await openLogin(site, env);
+    const cleanupReached = deferred();
+    const continueCleanup = deferred();
+    const closing = closeLogin(site, env, {
+      lifecycleHooks: {
+        beforeCleanup: async () => {
+          cleanupReached.resolve();
+          await continueCleanup.promise;
+        },
+      },
+    });
+    await cleanupReached.promise;
+    assert.equal(await exists(metadataPath), true);
+    assert.equal(await exists(configPath), true);
+    assert.equal(await exists(paths.profile), true);
+    assert.match((await readLock(paths.lock)).owner, /^login:profile-login:/);
+    await assert.rejects(openLogin(site, env), /SESSION_BUSY/);
+    continueCleanup.resolve();
+    await closing;
+
+    await openLogin(site, env);
+    assert.equal(await exists(metadataPath), true);
+    assert.equal(await exists(configPath), true);
+    assert.equal(await exists(paths.profile), true);
+    assert.match((await readLock(paths.lock)).owner, /^login:profile-login:/);
+    await closeLogin(site, env);
+  } finally {
+    await closeLogin(site, env).catch(() => {});
     await closeServer(app);
     await rm(paths.socketDirectory, { recursive: true, force: true });
     await rm(root, { recursive: true, force: true });

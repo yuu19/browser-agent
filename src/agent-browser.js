@@ -716,12 +716,14 @@ async function removeSessionArtifacts(paths, metadata) {
   if (metadata.metadataPath) await rm(metadata.metadataPath, { force: true });
 }
 
-async function closeSession(paths, metadata, env, { archive = false } = {}) {
+async function closeSession(paths, metadata, env, { archive = false, lifecycleHooks } = {}) {
   await runAgentBrowser(paths, metadata.configPath, ['close'], env, 'close');
+  await lifecycleHooks?.afterEngineClose?.(metadata);
   if (archive && metadata.metadataPath) {
     await archiveRuntimeFile(metadata.metadataPath, paths.archive, 'stale-session');
     metadata.metadataPath = null;
   }
+  await lifecycleHooks?.beforeCleanup?.(metadata);
   await removeSessionArtifacts(paths, metadata);
   if (metadata.siteLockOwner) await releaseLock(paths.lock, metadata.siteLockOwner);
 }
@@ -948,17 +950,30 @@ async function prepareLogin(site, paths, env) {
   }
 }
 
-export async function openLogin(site, env = process.env) {
+async function withLoginLifecycle(site, env, lifecycleHooks, operation) {
   const paths = siteRuntimePaths(site.id, env);
-  const metadata = await prepareLogin(site, paths, env);
+  const name = managedSessionName(site.id, 'login', 'login');
+  const commandLock = await acquireCommandLock(paths, name);
   try {
-    const { stdout } = await runAgentBrowser(paths, metadata.configPath, ['open', site.loginUrl], env, 'login open');
-    await inspectTabs(site, paths, metadata, env);
-    return stdout.trimEnd();
-  } catch (error) {
-    await failClosed(paths, metadata, env);
-    throw error;
+    await lifecycleHooks?.afterLock?.({ paths, name });
+    return await operation({ paths, name });
+  } finally {
+    await releaseLock(commandLock.path, commandLock.owner).catch(() => {});
   }
+}
+
+export async function openLogin(site, env = process.env, { lifecycleHooks } = {}) {
+  return withLoginLifecycle(site, env, lifecycleHooks, async ({ paths }) => {
+    const metadata = await prepareLogin(site, paths, env);
+    try {
+      const { stdout } = await runAgentBrowser(paths, metadata.configPath, ['open', site.loginUrl], env, 'login open');
+      await inspectTabs(site, paths, metadata, env);
+      return stdout.trimEnd();
+    } catch (error) {
+      await failClosed(paths, metadata, env);
+      throw error;
+    }
+  });
 }
 
 async function validateAuthState(path, executablePath, site, env) {
@@ -985,43 +1000,36 @@ async function validateAuthState(path, executablePath, site, env) {
   }
 }
 
-export async function saveLogin(site, env = process.env) {
+export async function saveLogin(site, env = process.env, { lifecycleHooks } = {}) {
   if (site.authMode !== 'state') throw policyError(`site ${site.id} uses profile authentication; close the login session instead`);
-  const paths = siteRuntimePaths(site.id, env);
-  const name = managedSessionName(site.id, 'login', 'login');
-  const metadataPath = sessionMetadataPath(paths, name);
-  if (!(await exists(metadataPath))) throw new BrowserAgentError('SESSION_NOT_OPEN', 'login open must run before login save');
-  const { path: lockPath, owner: commandLockOwner } = await acquireCommandLock(paths, name);
-  const metadata = await readSessionMetadata(metadataPath, paths);
-  const temporary = temporarySibling(paths.authState, '.storage-state.json');
-  try {
-    await ensurePrivateDirectory(join(paths.root, 'auth'));
-    await assertStreamDisabled(paths, metadata, env);
-    await inspectTabs(site, paths, metadata, env);
-    await runAgentBrowser(paths, metadata.configPath, ['state', 'save', temporary], env, 'login save');
-    const executablePath = await resolveBrowserExecutable(site.browser.channel, { env });
-    await validateAuthState(temporary, executablePath, site, env);
-    await chmod(temporary, 0o600);
-    await rename(temporary, paths.authState);
-    await closeSession(paths, metadata, env);
-  } finally {
-    await rm(temporary, { force: true });
-    await releaseLock(lockPath, commandLockOwner).catch(() => {});
-  }
+  return withLoginLifecycle(site, env, lifecycleHooks, async ({ paths, name }) => {
+    const metadataPath = sessionMetadataPath(paths, name);
+    if (!(await exists(metadataPath))) throw new BrowserAgentError('SESSION_NOT_OPEN', 'login open must run before login save');
+    const metadata = await readSessionMetadata(metadataPath, paths);
+    const temporary = temporarySibling(paths.authState, '.storage-state.json');
+    try {
+      await ensurePrivateDirectory(join(paths.root, 'auth'));
+      await assertStreamDisabled(paths, metadata, env);
+      await inspectTabs(site, paths, metadata, env);
+      await runAgentBrowser(paths, metadata.configPath, ['state', 'save', temporary], env, 'login save');
+      const executablePath = await resolveBrowserExecutable(site.browser.channel, { env });
+      await validateAuthState(temporary, executablePath, site, env);
+      await chmod(temporary, 0o600);
+      await rename(temporary, paths.authState);
+      await closeSession(paths, metadata, env, { lifecycleHooks });
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  });
 }
 
-export async function closeLogin(site, env = process.env) {
-  const paths = siteRuntimePaths(site.id, env);
-  const name = managedSessionName(site.id, 'login', 'login');
-  const metadataPath = sessionMetadataPath(paths, name);
-  if (!(await exists(metadataPath))) throw new BrowserAgentError('SESSION_NOT_OPEN', 'no managed login session is open');
-  const { path: lockPath, owner: commandLockOwner } = await acquireCommandLock(paths, name);
-  try {
+export async function closeLogin(site, env = process.env, { lifecycleHooks } = {}) {
+  return withLoginLifecycle(site, env, lifecycleHooks, async ({ paths, name }) => {
+    const metadataPath = sessionMetadataPath(paths, name);
+    if (!(await exists(metadataPath))) throw new BrowserAgentError('SESSION_NOT_OPEN', 'no managed login session is open');
     const metadata = await readSessionMetadata(metadataPath, paths);
-    await closeSession(paths, metadata, env);
-  } finally {
-    await releaseLock(lockPath, commandLockOwner).catch(() => {});
-  }
+    await closeSession(paths, metadata, env, { lifecycleHooks });
+  });
 }
 
 export async function unlockSite(site, env = process.env, { lockHooks } = {}) {

@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import {
   acquireCommandLock,
   acquireSiteLock,
+  closeLogin,
   managedSessionName,
   normalizeBrowserCommand,
+  openLogin,
   runBrowserCommand,
+  saveLogin,
   unlockSite,
 } from '../src/agent-browser.js';
 import { verifyAgentBrowserBinary, verifyAgentBrowserPolicy } from '../src/agent-browser-binary.js';
@@ -162,6 +165,53 @@ test('managed session names encode site, session, and purpose without concatenat
   assert.notEqual(first, managedSessionName('foo-bar', 'baz', 'login'));
   assert.match(first, /^ba-[a-f0-9]{32}$/);
 });
+
+for (const [authMode, competingOperation, expectedCode] of [
+  ['state', saveLogin, /SESSION_BUSY/],
+  ['profile', closeLogin, /SESSION_BUSY/],
+]) {
+  test(`login open holds the ${authMode} lifecycle mutex before metadata creation`, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), `browser-agent-login-${authMode}-mutex-`));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const env = { ...process.env, BROWSER_AGENT_DATA_DIR: root, XDG_RUNTIME_DIR: root };
+    const loginSite = {
+      ...site,
+      authMode,
+      browser: {
+        channel: 'chromium',
+        viewport: { width: 800, height: 600 },
+        deviceScaleFactor: 1,
+        locale: 'ja-JP',
+        captureHeaded: false,
+      },
+    };
+    const lockAcquired = deferred();
+    const abortOpen = deferred();
+    const opening = openLogin(loginSite, env, {
+      lifecycleHooks: {
+        afterLock: async () => {
+          lockAcquired.resolve();
+          await abortOpen.promise;
+          throw new Error('INJECTED_OPEN_ABORT');
+        },
+      },
+    });
+    await lockAcquired.promise;
+    await assert.rejects(competingOperation(loginSite, env), expectedCode);
+
+    const paths = siteRuntimePaths(loginSite.id, env);
+    assert.deepEqual(await readdir(paths.sessions).catch(() => []), []);
+    assert.deepEqual(await readdir(paths.configs).catch(() => []), []);
+    assert.deepEqual(await readdir(paths.workingProfiles).catch(() => []), []);
+    assert.equal(await exists(paths.lock), false);
+
+    abortOpen.resolve();
+    await assert.rejects(opening, /INJECTED_OPEN_ABORT/);
+    await assert.rejects(competingOperation(loginSite, env), /SESSION_NOT_OPEN/);
+    const name = managedSessionName(loginSite.id, 'login', 'login');
+    assert.equal(await exists(join(paths.commandLocks, `${name}.json`)), false);
+  });
+}
 
 test('pre-bootstrap setup failure rolls back every disposable session artifact', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'browser-agent-setup-rollback-'));
