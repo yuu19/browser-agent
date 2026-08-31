@@ -16,6 +16,7 @@ const AUDIT_MAX_ENTRIES = 1_000;
 const AUDIT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
 const AUDIT_LOCK_TIMEOUT_MS = 5_000;
 const AUDIT_LOCK_RETRY_MS = 20;
+const auditQueues = new Map();
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -25,6 +26,18 @@ function busyError(code, message) {
   const error = new Error(message);
   error.code = code;
   return error;
+}
+
+async function withAuditQueue(key, operation) {
+  const previous = auditQueues.get(key) ?? Promise.resolve();
+  const running = previous.then(operation);
+  const tail = running.catch(() => {});
+  auditQueues.set(key, tail);
+  try {
+    return await running;
+  } finally {
+    if (auditQueues.get(key) === tail) auditQueues.delete(key);
+  }
 }
 
 async function acquireRecoveryLock(paths, hooks) {
@@ -99,38 +112,40 @@ async function acquireAuditLock(paths, owner, options) {
 }
 
 export async function appendAudit(paths, record, options = {}) {
-  const owner = createLockOwner('audit');
-  const lockPath = await acquireAuditLock(paths, owner, options);
-  try {
-    let records = [];
+  return withAuditQueue(paths.audit, async () => {
+    const owner = createLockOwner('audit');
+    const lockPath = await acquireAuditLock(paths, owner, options);
     try {
-      records = (await readFile(paths.audit, 'utf8'))
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => JSON.parse(line));
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        await archiveRuntimeFile(paths.audit, paths.archive, 'damaged-audit');
-        records = [];
+      let records = [];
+      try {
+        records = (await readFile(paths.audit, 'utf8'))
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          await archiveRuntimeFile(paths.audit, paths.archive, 'damaged-audit');
+          records = [];
+        }
       }
-    }
-    const cutoff = Date.now() - AUDIT_MAX_AGE_MS;
-    records = [...records, record]
-      .filter((item) => Date.parse(item.timestamp) >= cutoff)
-      .slice(-AUDIT_MAX_ENTRIES);
-    const temporary = temporarySibling(paths.audit, '.jsonl');
-    await ensurePrivateDirectory(paths.runtime);
-    try {
-      await writeFile(
-        temporary,
-        `${records.map((item) => JSON.stringify(item)).join('\n')}\n`,
-        { mode: 0o600 },
-      );
-      await rename(temporary, paths.audit);
+      const cutoff = Date.now() - AUDIT_MAX_AGE_MS;
+      records = [...records, record]
+        .filter((item) => Date.parse(item.timestamp) >= cutoff)
+        .slice(-AUDIT_MAX_ENTRIES);
+      const temporary = temporarySibling(paths.audit, '.jsonl');
+      await ensurePrivateDirectory(paths.runtime);
+      try {
+        await writeFile(
+          temporary,
+          `${records.map((item) => JSON.stringify(item)).join('\n')}\n`,
+          { mode: 0o600 },
+        );
+        await rename(temporary, paths.audit);
+      } finally {
+        await rm(temporary, { force: true });
+      }
     } finally {
-      await rm(temporary, { force: true });
+      await releaseLock(lockPath, owner);
     }
-  } finally {
-    await releaseLock(lockPath, owner);
-  }
+  });
 }
