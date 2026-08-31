@@ -39,6 +39,7 @@ import {
   readLock,
   reclaimLock,
   releaseLock,
+  verifyLockGuard,
   writeJsonAtomic,
 } from './runtime.js';
 
@@ -1109,5 +1110,6 @@ export async function agentBrowserDoctor(env = process.env) {
   await verifyAgentBrowserPolicy();
   const executablePath = await resolveBrowserExecutable('auto', { env });
   await access(agentBrowserPolicyPath, constants.R_OK);
+  await verifyLockGuard();
   return { ...verified, executablePath };
 }

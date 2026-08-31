@@ -16,6 +16,8 @@ import {
 import { basename, dirname, join } from 'node:path';
 import { temporarySibling } from './paths.js';
 
+const LOCK_GUARD_BINARY = '/usr/bin/flock';
+
 export async function exists(path) {
   try {
     await access(path, constants.F_OK);
@@ -52,13 +54,18 @@ export function createLockOwner(label) {
   return `${label}:${process.pid}:${randomUUID()}`;
 }
 
+export async function verifyLockGuard(binary = LOCK_GUARD_BINARY) {
+  await access(binary, constants.X_OK);
+  return binary;
+}
+
 async function withLockGuard(path, callback) {
   await ensurePrivateDirectory(dirname(path));
   const guardPath = `${path}.guard`;
   await writeFile(guardPath, '', { flag: 'a', mode: 0o600 });
   await chmod(guardPath, 0o600);
 
-  const child = spawn('/usr/bin/flock', [
+  const child = spawn(await verifyLockGuard(), [
     '--exclusive',
     guardPath,
     '/bin/sh',

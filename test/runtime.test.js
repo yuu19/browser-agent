@@ -10,6 +10,7 @@ import {
   readLock,
   reclaimLock,
   releaseLock,
+  verifyLockGuard,
   writeJsonAtomic,
 } from '../src/runtime.js';
 
@@ -32,6 +33,11 @@ test('profile lock is exclusive and ownership is checked', async () => {
 
 test('lock owner tokens are unique for every acquisition lifecycle', () => {
   assert.notEqual(createLockOwner('site:example'), createLockOwner('site:example'));
+});
+
+test('lock guard binary is fixed and executable', async () => {
+  assert.equal(await verifyLockGuard(), '/usr/bin/flock');
+  await assert.rejects(verifyLockGuard('/missing/browser-agent-flock'), /ENOENT/);
 });
 
 for (const lockKind of ['site', 'command', 'unlock']) {
