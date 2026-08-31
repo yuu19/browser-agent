@@ -1,6 +1,7 @@
 {
   "baseUrl": "https://example.com/",
   "loginUrl": "https://example.com/",
+  "allowedOrigins": ["https://example.com"],
   "authMode": "profile",
   "browser": {
     "channel": "auto",

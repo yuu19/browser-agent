@@ -1,24 +1,24 @@
 {
   "name": "browser-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=24.0.0"
   },
   "bin": {
     "browser-agent": "./bin/browser-agent.js"
   },
   "scripts": {
-    "check": "node --check bin/browser-agent.js && node --check src/browser.js && node --check src/cli.js && node --check src/capture.js && node --check src/fonts.js && node --check src/imagemagick.js && node --check scripts/fetch-fonts.js",
+    "check": "node --check bin/browser-agent.js && node --check src/agent-browser-binary.js && node --check src/agent-browser.js && node --check src/audit.js && node --check src/browser.js && node --check src/cli.js && node --check src/capture.js && node --check src/config.js && node --check src/environment.js && node --check src/fonts.js && node --check src/imagemagick.js && node --check src/profile-workspace.js && node --check src/runtime.js && node --check scripts/fetch-fonts.js",
     "fonts:check": "node scripts/fetch-fonts.js --check",
     "fonts:fetch": "node scripts/fetch-fonts.js",
     "test": "node --test",
-    "test:integration": "BROWSER_AGENT_INTEGRATION=1 node --test test/capture.integration.test.js",
+    "test:integration": "BROWSER_AGENT_INTEGRATION=1 node --test test/agent-browser.integration.test.js test/capture.integration.test.js",
     "verify": "npm run check && npm run fonts:check && npm test"
   },
   "dependencies": {
-    "@playwright/cli": "0.1.17",
+    "agent-browser": "0.35.1",
     "playwright": "1.62.0"
   }
 }

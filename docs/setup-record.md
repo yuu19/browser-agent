@@ -4,7 +4,15 @@
 Cloudflare Dashboardは専用プロファイルでログイン済みです。
 ブラウザの認証情報はGitで管理しません。
 
-この文書は、2026年8月18日時点の導入内容と設定状態を記録しています。
+この文書は、2026年8月29日時点の導入内容と設定状態を記録しています。
+
+## 2026年8月29日の操作エンジン移行
+
+通常のブラウザ操作を`@playwright/cli`から`agent-browser` 0.35.1へ変更しました。`browser-agent`は、安全なポリシー、認証正本、実行状態、監査、撮影を管理する外側のレイヤーとして残しています。
+
+移行は破壊的変更です。パッケージ版を0.3.0へ上げ、旧Playwright CLI互換を削除しました。`browser-agent browser`の後ろには、`snapshot -i`で得た`@e3`のような`agent-browser`参照を指定します。
+
+安全境界と許可操作は[操作エンジンの安全設計](agent-browser-security.md)を参照してください。
 
 ## 今回導入したもの
 
@@ -15,7 +23,7 @@ Cloudflare Dashboardは専用プロファイルでログイン済みです。
 
 | 用途 | パッケージ | バージョン |
 |---|---|---|
-| Codexからの対話的なブラウザ操作 | `@playwright/cli` | `0.1.17` |
+| Codexからの対話的なブラウザ操作 | `agent-browser` | `0.35.1` |
 | マスク付き撮影とブラウザ制御 | `playwright` | `1.62.0` |
 
 導入時のコマンド:
@@ -24,8 +32,7 @@ Cloudflare Dashboardは専用プロファイルでログイン済みです。
 npm install
 ```
 
-公開版の更新は自動追従しません。
-動作を確認してから、`package.json`と`package-lock.json`を更新します。
+公開版の更新は自動追従しません。Linux x64とArm64のネイティブバイナリは、[承認済みバイナリ一覧](../config/agent-browser-binaries.json)のSHA-256と毎回照合します。
 
 ### 日本語・英語フォント
 
@@ -58,14 +65,14 @@ npm run fonts:check
 | 赤枠・番号の画像加工 | ImageMagick | `6.9.12-98 Q16` |
 | カラー絵文字 | `fonts-noto-color-emoji` | `2.047-0ubuntu0.24.04.1` |
 
-プロジェクトが要求するNode.jsの最低バージョンは20です。
+プロジェクトが要求するNode.jsの最低バージョンは24です。
 現在の実行環境はこの条件を満たしています。
 
 ## 追加した設定
 
 ### ブラウザ認証
 
-Cloudflareは、SaaSごとの永続Chromeプロファイルを使います。
+Cloudflareは、SaaSごとの永続Chromeプロファイルを認証の正本として使います。
 認証方式は`profile`です。
 ログインとMFAはChrome上で手動実行しました。
 
@@ -80,7 +87,7 @@ Gitで管理しない実行状態:
 ~/.local/share/browser-agent/profiles/cloudflare/
 ```
 
-このディレクトリにはCookieなどのログイン状態が含まれます。
+このディレクトリにはCookieなどのログイン状態が含まれます。通常操作と撮影では正本を直接開かず、privateな一時コピーを使います。
 共有、バックアップへの無確認追加、Gitへの追加は行いません。
 
 ### Cloudflareの撮影
@@ -165,9 +172,9 @@ Chromeへ渡す専用設定とキャッシュは、次の場所に作成しま�
 
 - `node_modules/`
 - Chromeプロファイル
-- Playwrightの認証state
+- ブラウザの認証state
 - `.env`とシークレット
-- Playwrightの一時ファイル
+- agent-browserとPlaywrightの一時ファイル
 - 加工前スクリーンショット
 - `artifacts/`
 
@@ -180,9 +187,11 @@ Chromeへ渡す専用設定とキャッシュは、次の場所に作成しま�
 | 環境確認 | `browser-agent doctor` |
 | サイト設定の検証 | `browser-agent validate` |
 | 手動ログイン開始 | `browser-agent login open <site>` |
+| state方式の認証保存 | `browser-agent login save <site>` |
 | ログイン用Chromeの正常終了 | `browser-agent login close <site>` |
 | 通常のブラウザ操作 | `browser-agent browser <site> ...` |
 | マスク付き撮影 | `browser-agent capture <site> <capture>` |
+| 停止済み実行状態の回収 | `browser-agent unlock <site>` |
 
 現在、`npm link`によるグローバルコマンド登録は実施していません。
 このリポジトリでは、次の形式で実行できます。
@@ -199,14 +208,14 @@ npm link
 
 ## 新しい環境での再現手順
 
-1. Node.js 20以上、ImageMagick、fontconfigを用意します。
+1. Node.js 24以上、ImageMagick、fontconfig、`lsof`、`fuser`を用意します。
 2. Linux Arm64ではPlaywright Chromium、それ以外ではGoogle Chromeを用意します。
 3. `npm ci`でロック済み依存関係を導入します。
 4. `npm run fonts:fetch`で固定フォントを確認し、不足時だけ取得します。
 5. `node bin/browser-agent.js doctor`を実行します。
 6. `node bin/browser-agent.js validate`を実行します。
 7. SaaSごとに`login open`でログインとMFAを完了します。
-8. `login close`でブラウザを正常終了します。
+8. profile方式は`login close`、state方式は`login save`で正常終了します。
 
 リポジトリ内の自動セットアップは次のコマンドです。
 
@@ -225,6 +234,23 @@ npx playwright install --with-deps chromium
 `browser.channel`の`auto`は、Linux Arm64でPlaywright Chromiumを選びます。それ以外の環境ではGoogle Chromeを選びます。
 
 ## 検証結果
+
+2026年8月29日の移行では、使い捨てローカルサイトと一時認証データだけで次を確認しました。既存サービスの保存済み認証を使うカナリアは別工程です。
+
+- 固定版`agent-browser`の版とSHA-256
+- 外側allowlistと上流default-deny方針
+- stream無効化、全タブの許可オリジン検査、許可外オリジン時の終了
+- operationとcaptureで同じChrome実行ファイル、viewport、倍率、localeを使用
+- profile正本を変更しない通常操作と撮影
+- stateの検証付き原子的保存と通常操作でのread-only利用
+- 内容を含まない監査記録
+- マスク失敗時のfail-closedな画像更新
+- `npm run verify`: 成功
+- `browser-agent doctor`: 成功
+- 全4サイトの設定検証: 成功
+- 実ブラウザ統合テスト: 9件成功
+
+以下は移行前の履歴です。
 
 2026年8月18日に次を確認しました。
 

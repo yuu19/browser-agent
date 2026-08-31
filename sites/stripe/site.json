@@ -1,6 +1,7 @@
 {
   "baseUrl": "https://dashboard.stripe.com/",
   "loginUrl": "https://dashboard.stripe.com/login",
+  "allowedOrigins": ["https://dashboard.stripe.com"],
   "authMode": "profile",
   "browser": {
     "channel": "auto",

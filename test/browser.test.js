@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { chmod, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   browserRuntimeCheck,
   recommendedBrowserChannel,
+  resolveBrowserExecutable,
   resolveBrowserChannel,
 } from '../src/browser.js';
 
@@ -18,28 +22,53 @@ test('other supported hosts keep Google Chrome as the automatic channel', () => 
   assert.equal(recommendedBrowserChannel({ platform: 'darwin', arch: 'arm64' }), 'chrome');
 });
 
-test('runtime checks use the bundled Chromium executable on Linux Arm64', () => {
+test('runtime checks use the bundled Chromium executable on Linux Arm64', async () => {
+  const executable = await realpath('/bin/sh');
   assert.deepEqual(
-    browserRuntimeCheck('auto', {
+    await browserRuntimeCheck('auto', {
       platform: 'linux',
       arch: 'arm64',
-      chromiumExecutablePath: '/opt/playwright/chromium',
+      chromiumExecutablePath: '/bin/sh',
     }),
     {
       channel: 'chromium',
       label: 'Playwright Chromium',
-      command: '/opt/playwright/chromium',
+      command: executable,
       args: ['--version'],
     },
   );
 });
 
-test('explicit branded channels keep their system command', () => {
-  const check = browserRuntimeCheck('chrome', {
+test('explicit branded channels resolve an immutable fixed system path', async () => {
+  const executable = await realpath('/bin/sh');
+  const check = await browserRuntimeCheck('chrome', {
     platform: 'linux',
     arch: 'arm64',
     chromiumExecutablePath: '/unused',
+    trustedBrowserCandidates: new Map([['chrome', ['/bin/sh']]]),
   });
   assert.equal(check.channel, 'chrome');
-  assert.equal(check.command, 'google-chrome');
+  assert.equal(check.command, executable);
+});
+
+test('branded browser resolution ignores caller PATH and rejects user-writable fixed paths', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'browser-agent-browser-trust-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const shim = join(root, 'google-chrome');
+  await writeFile(shim, '#!/bin/sh\nexit 0\n');
+  await chmod(shim, 0o755);
+
+  await assert.rejects(
+    resolveBrowserExecutable('chrome', {
+      env: { PATH: root },
+      trustedBrowserCandidates: new Map([['chrome', ['/definitely/missing/google-chrome']]]),
+    }),
+    /trusted browser executable is missing/,
+  );
+  await assert.rejects(
+    resolveBrowserExecutable('chrome', {
+      trustedBrowserCandidates: new Map([['chrome', [shim]]]),
+    }),
+    /writable by the current user/,
+  );
 });
