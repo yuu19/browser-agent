@@ -146,6 +146,7 @@ function sameLock(left, right) {
 }
 
 export async function acquireLock(path, owner, metadata = {}) {
+  await verifyLockGuard();
   await ensurePrivateDirectory(dirname(path));
   const value = { ...metadata, owner, pid: process.pid, createdAt: new Date().toISOString() };
   const temporary = temporarySibling(path, '.lock');
