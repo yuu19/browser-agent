@@ -45,6 +45,8 @@ import {
 
 const MAX_UPSTREAM_OUTPUT = 100_000;
 const MAX_AUTH_STATE_BYTES = 10 * 1024 * 1024;
+const RUNTIME_SHUTDOWN_TIMEOUT_MS = 5_000;
+const RUNTIME_SHUTDOWN_RETRY_MS = 50;
 const FIND_LOCATORS = new Set(['role', 'text', 'label', 'placeholder', 'alt', 'title', 'testid', 'first', 'last', 'nth']);
 const FIND_ACTIONS = new Set(['click', 'fill', 'check', 'hover', 'text']);
 const GET_ACTIONS = new Set(['text', 'title', 'url', 'count', 'box', 'styles']);
@@ -517,6 +519,25 @@ async function assertRuntimeInactive(metadata, paths, env) {
   }
 }
 
+async function waitForRuntimeShutdown(metadata, paths, env) {
+  const deadline = Date.now() + RUNTIME_SHUTDOWN_TIMEOUT_MS;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      if (metadata.daemonPid && processIsAlive(metadata.daemonPid)) {
+        throw new BrowserAgentError('RUNTIME_ACTIVE', 'the agent-browser daemon is still stopping');
+      }
+      await assertRuntimeInactive(metadata, paths, env);
+      return;
+    } catch (error) {
+      if (!['RUNTIME_ACTIVE', 'AGENT_BROWSER_COMMAND_FAILED'].includes(error.code)) throw error;
+      lastError = error;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, RUNTIME_SHUTDOWN_RETRY_MS));
+    }
+  }
+  throw lastError ?? new BrowserAgentError('RUNTIME_ACTIVE', 'the managed browser runtime did not stop');
+}
+
 async function reclaimSiteLock(paths, env, { expectedOwner, hooks, verifyInactive } = {}) {
   return reclaimLock(paths.lock, paths.archive, 'stale-lock', async (metadata) => {
     if (expectedOwner && metadata.owner !== expectedOwner) {
@@ -719,6 +740,7 @@ async function removeSessionArtifacts(paths, metadata) {
 
 async function closeSession(paths, metadata, env, { archive = false, lifecycleHooks } = {}) {
   await runAgentBrowser(paths, metadata.configPath, ['close'], env, 'close');
+  await waitForRuntimeShutdown(metadata, paths, env);
   await lifecycleHooks?.afterEngineClose?.(metadata);
   if (archive && metadata.metadataPath) {
     await archiveRuntimeFile(metadata.metadataPath, paths.archive, 'stale-session');
