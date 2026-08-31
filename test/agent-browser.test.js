@@ -10,6 +10,7 @@ import {
   runBrowserCommand,
   saveLogin,
   unlockSite,
+  withLoginLifecycle,
 } from '../src/agent-browser.js';
 import { verifyAgentBrowserBinary, verifyAgentBrowserPolicy } from '../src/agent-browser-binary.js';
 import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
@@ -212,6 +213,45 @@ for (const [authMode, competingOperation, expectedCode] of [
     assert.equal(await exists(join(paths.commandLocks, `${name}.json`)), false);
   });
 }
+
+test('login lifecycle reports release failure and preserves an earlier operation error', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'browser-agent-login-release-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const env = { ...process.env, BROWSER_AGENT_DATA_DIR: root, XDG_RUNTIME_DIR: root };
+  const paths = siteRuntimePaths(site.id, env);
+  const name = managedSessionName(site.id, 'login', 'login');
+  const lockPath = join(paths.commandLocks, `${name}.json`);
+
+  async function replaceLifecycleLock() {
+    const current = await readLock(lockPath);
+    await releaseLock(lockPath, current.owner);
+    const replacementOwner = createLockOwner('command:replacement');
+    await acquireLock(lockPath, replacementOwner);
+    return replacementOwner;
+  }
+
+  let replacementOwner;
+  await assert.rejects(
+    withLoginLifecycle(site, env, undefined, async () => {
+      replacementOwner = await replaceLifecycleLock();
+      return 'success';
+    }),
+    /owned by/,
+  );
+  assert.equal((await readLock(lockPath)).owner, replacementOwner);
+  await releaseLock(lockPath, replacementOwner);
+
+  const operationError = new Error('INJECTED_OPERATION_FAILURE');
+  await assert.rejects(
+    withLoginLifecycle(site, env, undefined, async () => {
+      replacementOwner = await replaceLifecycleLock();
+      throw operationError;
+    }),
+    (error) => error === operationError && /owned by/.test(error.cause?.message ?? ''),
+  );
+  assert.equal((await readLock(lockPath)).owner, replacementOwner);
+  await releaseLock(lockPath, replacementOwner);
+});
 
 test('pre-bootstrap setup failure rolls back every disposable session artifact', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'browser-agent-setup-rollback-'));

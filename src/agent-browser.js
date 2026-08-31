@@ -950,15 +950,24 @@ async function prepareLogin(site, paths, env) {
   }
 }
 
-async function withLoginLifecycle(site, env, lifecycleHooks, operation) {
+export async function withLoginLifecycle(site, env, lifecycleHooks, operation) {
   const paths = siteRuntimePaths(site.id, env);
   const name = managedSessionName(site.id, 'login', 'login');
   const commandLock = await acquireCommandLock(paths, name);
+  let operationError;
   try {
     await lifecycleHooks?.afterLock?.({ paths, name });
     return await operation({ paths, name });
+  } catch (error) {
+    operationError = error;
+    throw error;
   } finally {
-    await releaseLock(commandLock.path, commandLock.owner).catch(() => {});
+    try {
+      await releaseLock(commandLock.path, commandLock.owner);
+    } catch (releaseError) {
+      if (!operationError) throw releaseError;
+      if (operationError.cause === undefined) operationError.cause = releaseError;
+    }
   }
 }
 
