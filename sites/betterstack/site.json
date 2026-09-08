@@ -1,6 +1,7 @@
 {
   "baseUrl": "https://betterstack.com/",
   "loginUrl": "https://betterstack.com/users/sign-in",
+  "allowedOrigins": ["https://betterstack.com"],
   "authMode": "profile",
   "browser": {
     "channel": "auto",

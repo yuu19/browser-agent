@@ -33,7 +33,7 @@ node scripts/fetch-fonts.js --force
 
 ## 実行時の適用
 
-`capture`、`login open`、`browser open`は、ブラウザ起動前にTTFのSHA-256を検証します。検証後、専用fontconfigをブラウザプロセスだけに適用します。
+`capture`、`login open`、`browser open`は、ブラウザ起動前にTTFのSHA-256を検証します。検証後、専用fontconfigをブラウザプロセスだけに適用します。通常操作を担う`agent-browser`と撮影を担うPlaywright Libraryには、同じ実行ファイルの絶対パスと同じfontconfig環境を渡します。
 
 サイト固有のWebフォントは置き換えません。`sans-serif`と`system-ui`、およびChromeが英語の既定名として使うArial・Helvetica系の未導入フォントだけを固定フォールバックへ解決します。
 

@@ -186,6 +186,10 @@ function validateBrowser(value, path) {
   if (!BROWSER_CHANNELS.has(channel)) {
     fail(`${path}.channel`, `must be one of ${[...BROWSER_CHANNELS].join(', ')}`);
   }
+  const locale = value.locale === undefined ? 'ja-JP' : string(value.locale, `${path}.locale`);
+  if (!/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/.test(locale)) {
+    fail(`${path}.locale`, 'must be a BCP 47-style language tag');
+  }
   return {
     channel,
     viewport: {
@@ -193,14 +197,40 @@ function validateBrowser(value, path) {
       height: positiveInteger(viewport.height, `${path}.viewport.height`, 900),
     },
     deviceScaleFactor: validateDeviceScaleFactor(value.deviceScaleFactor, `${path}.deviceScaleFactor`, 2),
-    locale: value.locale === undefined ? 'ja-JP' : string(value.locale, `${path}.locale`),
+    locale,
     captureHeaded: boolean(value.captureHeaded, `${path}.captureHeaded`, false),
   };
 }
 
+function validateAllowedOrigins(value, path, defaults) {
+  const origins = value === undefined ? defaults : value;
+  if (!Array.isArray(origins) || origins.length === 0) {
+    fail(path, 'must be a non-empty array of http or https origins');
+  }
+  const normalized = origins.map((origin, index) => {
+    string(origin, `${path}[${index}]`);
+    let parsed;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      fail(`${path}[${index}]`, 'must be an absolute origin');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)
+      || parsed.username
+      || parsed.password
+      || parsed.pathname !== '/'
+      || parsed.search
+      || parsed.hash) {
+      fail(`${path}[${index}]`, 'must contain only an http or https origin');
+    }
+    return parsed.origin;
+  });
+  return [...new Set(normalized)];
+}
+
 export function validateSite(value, siteId, path = 'site.json') {
   if (!isObject(value)) fail(path, 'must be an object');
-  onlyKeys(value, new Set(['baseUrl', 'loginUrl', 'authMode', 'browser']), path);
+  onlyKeys(value, new Set(['baseUrl', 'loginUrl', 'allowedOrigins', 'authMode', 'browser']), path);
   const baseUrl = string(value.baseUrl, `${path}.baseUrl`);
   try {
     const parsed = new URL(baseUrl);
@@ -217,7 +247,19 @@ export function validateSite(value, siteId, path = 'site.json') {
   }
   const authMode = value.authMode ?? 'profile';
   if (!['profile', 'state'].includes(authMode)) fail(`${path}.authMode`, 'must be "profile" or "state"');
-  return { id: siteId, baseUrl, loginUrl: new URL(loginUrl, baseUrl).href, authMode, browser: validateBrowser(value.browser, `${path}.browser`) };
+  const normalizedLoginUrl = new URL(loginUrl, baseUrl).href;
+  const allowedOrigins = validateAllowedOrigins(value.allowedOrigins, `${path}.allowedOrigins`, [
+    new URL(baseUrl).origin,
+    new URL(normalizedLoginUrl).origin,
+  ]);
+  return {
+    id: siteId,
+    baseUrl,
+    loginUrl: normalizedLoginUrl,
+    allowedOrigins,
+    authMode,
+    browser: validateBrowser(value.browser, `${path}.browser`),
+  };
 }
 
 export function validateCapture(value, captureId, path = 'captures.json') {

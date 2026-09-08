@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,14 +20,36 @@ export function sitesRoot(env = process.env) {
 
 export function siteRuntimePaths(siteId, env = process.env) {
   const root = dataRoot(env);
+  const runtimeRoot = join(root, 'runtime');
+  const runtime = join(runtimeRoot, siteId);
   return {
     root,
     profile: join(root, 'profiles', siteId),
     loginProfile: join(root, 'profiles', `${siteId}-login`),
     authState: join(root, 'auth', `${siteId}.json`),
-    runtime: join(root, 'runtime', siteId),
-    lock: join(root, 'runtime', 'locks', `${siteId}.json`),
+    runtimeRoot,
+    runtime,
+    socketDirectory: agentBrowserSocketDirectory(env),
+    sessions: join(runtime, 'sessions'),
+    workingProfiles: join(runtime, 'working-profiles'),
+    downloads: join(runtime, 'downloads'),
+    configs: join(runtime, 'configs'),
+    audit: join(runtime, 'audit.jsonl'),
+    archive: join(runtimeRoot, 'archive', siteId),
+    lock: join(runtimeRoot, 'locks', `${siteId}.json`),
+    commandLocks: join(runtimeRoot, 'command-locks'),
   };
+}
+
+export function agentBrowserNamespace(env = process.env) {
+  const digest = createHash('sha256').update(dataRoot(env)).digest('hex').slice(0, 16);
+  return `ba-${digest}`;
+}
+
+export function agentBrowserSocketDirectory(env = process.env) {
+  const digest = createHash('sha256').update(dataRoot(env)).digest('hex').slice(0, 12);
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 'user';
+  return join(env.XDG_RUNTIME_DIR ? resolve(env.XDG_RUNTIME_DIR) : tmpdir(), `ba-${uid}-${digest}`);
 }
 
 export function safeOutputPath(cwd, output) {

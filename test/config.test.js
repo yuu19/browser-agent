@@ -9,6 +9,20 @@ test('site defaults to profile auth and a reproducible viewport', () => {
   assert.deepEqual(site.browser.viewport, { width: 1440, height: 900 });
   assert.equal(site.browser.deviceScaleFactor, 2);
   assert.equal(site.browser.captureHeaded, false);
+  assert.deepEqual(site.allowedOrigins, ['https://example.com']);
+});
+
+test('site normalizes explicit top-level origins and rejects paths', () => {
+  const site = validateSite({
+    baseUrl: 'https://app.example.com/',
+    loginUrl: 'https://login.example.com/mfa',
+    allowedOrigins: ['https://app.example.com/', 'https://login.example.com'],
+  }, 'example');
+  assert.deepEqual(site.allowedOrigins, ['https://app.example.com', 'https://login.example.com']);
+  assert.throws(() => validateSite({
+    baseUrl: 'https://example.com/',
+    allowedOrigins: ['https://example.com/private'],
+  }, 'bad'), /must contain only/);
 });
 
 test('site accepts portable and explicit browser channels', () => {
@@ -39,6 +53,13 @@ test('site accepts a bounded device scale factor', () => {
     }, 'example'),
     /must be a number between 1 and 4/,
   );
+});
+
+test('site locale cannot inject additional Chrome arguments', () => {
+  assert.throws(() => validateSite({
+    baseUrl: 'https://example.com/',
+    browser: { locale: 'ja-JP,--proxy-server=unsafe' },
+  }, 'bad'), /BCP 47-style/);
 });
 
 test('site rejects non-http origins', () => {

@@ -1,6 +1,7 @@
 {
   "baseUrl": "https://dash.cloudflare.com/",
   "loginUrl": "https://dash.cloudflare.com/login",
+  "allowedOrigins": ["https://dash.cloudflare.com"],
   "authMode": "profile",
   "browser": {
     "channel": "auto",

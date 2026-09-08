@@ -3,13 +3,15 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { extname, dirname } from 'node:path';
 import { chromium } from 'playwright';
-import { resolveBrowserChannel } from './browser.js';
+import { createManagedProfileCopy } from './agent-browser.js';
+import { resolveBrowserExecutable } from './browser.js';
 import { assertCapturePrivacy } from './config.js';
+import { withoutProxyEnvironment } from './environment.js';
 import { verifiedBrowserFontEnvironment } from './fonts.js';
 import { resolveImageMagick } from './imagemagick.js';
 import { buildLocator, resolveStepTargets, resolveTarget } from './locator.js';
 import { safeOutputPathChecked, siteRuntimePaths, temporarySibling } from './paths.js';
-import { acquireLock, exists, releaseLock, replaceFileAtomic } from './runtime.js';
+import { exists, replaceFileAtomic } from './runtime.js';
 
 function resolveUrl(site, path) {
   const base = new URL(site.baseUrl);
@@ -246,11 +248,11 @@ async function renderFinalImage(source, destination, annotations, env = process.
   await assertPngContract(imageMagick, destination, dimensions);
 }
 
-async function openCaptureContext(site, paths, headed, env) {
-  const browserEnv = await verifiedBrowserFontEnvironment(env);
-  const channel = resolveBrowserChannel(site.browser.channel);
+async function openCaptureContext(site, paths, headed, env, profilePath) {
+  const browserEnv = await verifiedBrowserFontEnvironment(withoutProxyEnvironment(env));
+  const executablePath = await resolveBrowserExecutable(site.browser.channel, { env });
   const options = {
-    channel,
+    executablePath,
     headless: !headed,
     viewport: site.browser.viewport,
     deviceScaleFactor: site.browser.deviceScaleFactor,
@@ -258,14 +260,13 @@ async function openCaptureContext(site, paths, headed, env) {
     env: browserEnv,
   };
   if (site.authMode === 'profile') {
-    await mkdir(paths.profile, { recursive: true, mode: 0o700 });
-    const context = await chromium.launchPersistentContext(paths.profile, options);
+    const context = await chromium.launchPersistentContext(profilePath, options);
     return { browser: null, context };
   }
   if (!(await exists(paths.authState))) {
     throw new Error(`authentication state is missing for ${site.id}; run login open and login save first`);
   }
-  const browser = await chromium.launch({ channel, headless: !headed, env: browserEnv });
+  const browser = await chromium.launch({ executablePath, headless: !headed, env: browserEnv });
   const context = await browser.newContext({
     viewport: site.browser.viewport,
     deviceScaleFactor: site.browser.deviceScaleFactor,
@@ -289,14 +290,14 @@ export async function captureScreenshot(site, capture, options = {}) {
   const fullPage = options.fullPage ?? capture.fullPage;
   const headed = options.headed ?? site.browser.captureHeaded;
   const paths = siteRuntimePaths(site.id, env);
-  const lockOwner = `capture:${process.pid}`;
   const masked = temporarySibling(output, '.masked.png');
   const annotated = temporarySibling(output, '.annotated.png');
   let browser;
   let context;
-  if (site.authMode === 'profile') await acquireLock(paths.lock, lockOwner);
+  let profileCopy;
   try {
-    ({ browser, context } = await openCaptureContext(site, paths, headed, env));
+    if (site.authMode === 'profile') profileCopy = await createManagedProfileCopy(site, 'capture', env);
+    ({ browser, context } = await openCaptureContext(site, paths, headed, env, profileCopy?.profilePath));
     const pages = context.pages();
     const page = pages[0] ?? await context.newPage();
     await page.goto(resolveUrl(site, options.path ?? capture.path), { waitUntil: 'domcontentloaded' });
@@ -331,6 +332,6 @@ export async function captureScreenshot(site, capture, options = {}) {
     await browser?.close().catch(() => {});
     await rm(masked, { force: true });
     await rm(annotated, { force: true });
-    if (site.authMode === 'profile') await releaseLock(paths.lock, lockOwner).catch(() => {});
+    await profileCopy?.cleanup().catch(() => {});
   }
 }

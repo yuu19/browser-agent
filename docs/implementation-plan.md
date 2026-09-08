@@ -1,53 +1,61 @@
-# browser-agent 実装案
+# browser-agent実装方針
 
 ## 目的
 
-複数のプロジェクトから、ログイン済みのChromeまたはChromiumをPlaywrightで操作し、機密情報を撮影時にマスクした高解像度スクリーンショットを再現可能に生成する。
+複数プロジェクトから、ログイン済みブラウザを限定操作し、機密情報をマスクした高解像度スクリーンショットを再現可能に生成します。
 
-## 責務の分離
+## 責務
 
-```text
-Git管理するもの
-  assets/fonts/                 固定フォント、ライセンス、取得元とSHA-256
-  config/fontconfig/            ブラウザ専用のフォールバック設定
-  sites/<site>/site.json       サイト、認証方式、ブラウザ設定
-  sites/<site>/captures.json   撮影、マスク、注釈、準備操作
-  src/                         検証・認証・撮影処理
+`browser-agent`が持つ責務:
 
-Git管理しないもの
-  ~/.local/share/browser-agent/profiles/  ブラウザプロファイル
-  ~/.local/share/browser-agent/auth/      Playwright認証state
-  ~/.local/share/browser-agent/runtime/   一時設定・ロック
-```
+- サイトと許可オリジンの検証
+- 認証profileとstateの正本管理
+- `agent-browser`へ渡す操作と設定の制限
+- 実行中セッション、ロック、隔離download、監査記録の管理
+- Playwright Libraryによる限定操作、マスク、注釈、完成PNGの検査
+
+`agent-browser`へ委譲する責務:
+
+- Chromeの起動とnamed session
+- snapshot参照を使ったUI操作
+- タブ、ダイアログ、待機、DOM読み取りの低レベル実行
+
+責務外:
+
+- ページ内容の安全性保証
+- サブリソースを含む完全なネットワーク隔離
+- パスワードやMFAコードの自動入力
+- 未マスク画像、PDF、downloadファイルの公開
+- 記事やマニュアル本文の生成
 
 ## コマンド境界
 
-- `browser-agent browser`: 固定版Playwright CLIへの入口。通常操作はheadedで行う。
-- `browser-agent login open/save/close`: 手動ログインとMFAを扱う。`state`方式は明示的に保存する。
-- `browser-agent capture`: 宣言済みの限定操作、マスク、注釈、原子的な画像更新を行う。
-- `browser-agent validate`: ブラウザを起動せず、全設定を検証する。
+- `browser-agent browser`: default-denyの低レベル操作入口
+- `browser-agent login open/save/close`: 人によるログインと明示保存
+- `browser-agent capture`: 宣言済み準備操作、マスク、注釈、画像更新
+- `browser-agent unlock`: 停止を確認した古い実行状態の退避
+- `browser-agent validate`: ブラウザを起動しないサイト・撮影設定検査
+- `browser-agent doctor`: バイナリ、ブラウザ、フォント、画像処理、回収用コマンドの検査
 
-## 安全性
+## 実装上の不変条件
 
-- 認証情報、Cookie、ブラウザプロファイルはリポジトリ外に置く。
-- 対話操作用の`browser`では、未マスク画像を残す`screenshot`と`pdf`を実行しない。完成画像は`capture`だけで生成する。
-- 設定から任意JavaScript、入力、アップロードを実行しない。
-- 定義済み撮影のURLは上書きしない。画面ごとに撮影定義とマスクをレビューする。
-- ログイン済み画面は既定で`masked`とし、少なくとも1件の必須マスクを要求する。公開画面だけは`public`を明示する。
-- 必須マスクが一致しない、または件数条件を満たさない場合は撮影しない。
-- Webフォントと表示対象画像の読み込みを確認する。意図的に読み込めない画像は、構造化locatorで個別に除外する。
-- サイト固有のWebフォントを優先し、未指定時の日本語と英語だけを固定したローカルTTFへフォールバックする。
-- ローカルTTFのSHA-256が不一致の場合はブラウザを起動しない。撮影中はフォントをダウンロードしない。
-- マスクはPlaywrightのScreenshot APIで適用し、未マスク画像をディスクへ書かない。
-- 表示領域とPNG出力倍率を分離し、既定では1440×900のレイアウトを2880×1800で出力する。
-- 赤枠・番号の座標、余白、線幅、文字サイズをPNG出力倍率に合わせる。
-- 出力は呼び出し元ディレクトリ配下の相対パスに限定する。
-- 完成画像は同一ディレクトリ内の一時ファイルから原子的に置き換える。
-- 完成画像を不透明な8-bit sRGB RGB PNGへ正規化し、寸法と形式を保存前に検査する。
+1. 操作エンジンの版、ネイティブバイナリ、action方針を実行前に検証する。
+2. Chrome実行ファイル、viewport、倍率、localeは操作と撮影で一致させる。
+3. profile正本はログイン以外から更新しない。
+4. state正本は`login save`以外から更新しない。
+5. 通常操作はprivateな作業用profileだけを使う。
+6. 許可外トップレベルオリジンを検知したセッションは継続しない。
+7. 任意コード、ファイル、raw capture、認証storageの操作を公開しない。
+8. 未マスク画像をディスクへ書かない。
+9. 完成PNGは全検査成功後だけ原子的に置き換える。
+10. 古いロックは、全対象の停止を確認するまで変更しない。
 
-## 実装フェーズ
+詳細は[操作エンジンの安全設計](agent-browser-security.md)を参照してください。
 
-1. 設定スキーマとパス境界を実装する。
-2. `profile` / `state`認証とPlaywright CLIラッパーを実装する。
-3. 準備操作、fail-closedマスク、高DPI撮影、赤枠・番号注釈を実装する。
-4. 単体テストと実ブラウザを用いたローカル統合テストを行う。
+## 検証段階
+
+1. 単体テストで設定、引数、パス、権限、hash、方針、ロックを検証する。
+2. 使い捨てローカルサイトで実ブラウザ操作と撮影を検証する。
+3. 対象と操作を別途承認した後、既存サイト1件で読み取り専用カナリアを行う。
+
+単体・ローカル統合テストの成功を、既存サイトでの確認、デプロイ、commit、pushの完了とは扱いません。

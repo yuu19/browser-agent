@@ -9,6 +9,7 @@ import { resolveBrowserChannel } from '../src/browser.js';
 import { captureScreenshot } from '../src/capture.js';
 import { verifiedBrowserFontEnvironment } from '../src/fonts.js';
 import { resolveImageMagick } from '../src/imagemagick.js';
+import { siteRuntimePaths } from '../src/paths.js';
 
 const integrationTest = process.env.BROWSER_AGENT_INTEGRATION === '1' ? test : test.skip;
 
@@ -95,6 +96,7 @@ integrationTest('capture masks before writing and adds an annotation', { timeout
   const root = await mkdtemp(join(tmpdir(), 'browser-agent-capture-'));
   const env = { ...process.env, BROWSER_AGENT_DATA_DIR: join(root, 'data') };
   const output = await captureScreenshot(fixtureSite(url), fixtureCapture(url), { cwd: root, env });
+  const paths = siteRuntimePaths('fixture', env);
 
   assert.equal(output, join(root, 'artifacts', 'result.png'));
   const dimensions = await imageMagickOutput('identify', ['-format', '%w,%h', output]);
@@ -105,6 +107,8 @@ integrationTest('capture masks before writing and adds an annotation', { timeout
   assert.match(pixels.toLowerCase(), /1122?33|srgba?\(17,34,51(?:,1)?\)/);
   assert.match(pixels.toLowerCase(), /dc2626|srgba?\(220,38,38(?:,1)?\)/);
   assert.deepEqual((await readdir(join(root, 'artifacts'))).sort(), ['result.png']);
+  assert.deepEqual(await readdir(paths.profile), []);
+  assert.deepEqual(await readdir(paths.workingProfiles).catch(() => []), []);
 });
 
 integrationTest('required mask failure preserves an existing output', { timeout: 30_000 }, async () => {

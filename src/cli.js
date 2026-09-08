@@ -1,5 +1,13 @@
 import { spawn } from 'node:child_process';
-import { browserRuntimeCheck } from './browser.js';
+import {
+  agentBrowserDoctor,
+  closeLogin,
+  openLogin,
+  runBrowserCommand,
+  saveLogin,
+  unlockSite,
+} from './agent-browser.js';
+import { browserRuntimeCheck, resolveBrowserChannel } from './browser.js';
 import { captureScreenshot } from './capture.js';
 import {
   assertCapturePrivacy,
@@ -12,13 +20,6 @@ import {
 import { projectSessionId } from './paths.js';
 import { verifiedBrowserFontEnvironment } from './fonts.js';
 import { resolveImageMagick } from './imagemagick.js';
-import {
-  closeLogin,
-  openLogin,
-  runBrowserCommand,
-  saveLogin,
-  unlockSite,
-} from './playwright-cli.js';
 
 const HELP = `browser-agent
 
@@ -28,7 +29,7 @@ Usage:
   browser-agent login open <site>
   browser-agent login save <site>
   browser-agent login close <site>
-  browser-agent browser <site> [--session=<name>] <playwright-cli command...>
+  browser-agent browser <site> [--session=<name>] <agent-browser command...>
   browser-agent capture <site> [capture] [options]
   browser-agent unlock <site>
   browser-agent doctor
@@ -159,6 +160,12 @@ async function commandVersion(command, args, env = process.env) {
 
 async function doctor() {
   const fontEnv = await verifiedBrowserFontEnvironment(process.env);
+  let agentBrowser = null;
+  try {
+    agentBrowser = await agentBrowserDoctor(process.env);
+  } catch {
+    // Report with the other runtime checks below.
+  }
   let imageMagick = null;
   try {
     imageMagick = await resolveImageMagick(process.env);
@@ -171,16 +178,33 @@ async function doctor() {
     requestedChannels.add(site.browser.channel);
   }
   const browserChecks = new Map();
+  const missingBrowserChannels = new Set();
   for (const channel of requestedChannels) {
-    const check = browserRuntimeCheck(channel);
-    browserChecks.set(check.channel, check);
+    try {
+      const check = await browserRuntimeCheck(channel);
+      browserChecks.set(check.channel, check);
+    } catch {
+      missingBrowserChannels.add(resolveBrowserChannel(channel));
+    }
   }
   const checks = [
     ...[...browserChecks.values()].map((check) => [check.label, check.command, check.args, null, process.env]),
     ['Japanese sans-serif font', 'fc-match', ['-f', '%{family}|%{file}', 'sans-serif:lang=ja'], /Noto Sans JP.*NotoSansJP-Variable\.ttf/, fontEnv],
+    ['lsof', 'which', ['lsof'], /lsof/i, process.env],
+    ['fuser', 'which', ['fuser'], /fuser/i, process.env],
     ['English sans-serif font', 'fc-match', ['-f', '%{family}|%{file}', 'sans-serif:lang=en'], /Inter Variable.*InterVariable\.ttf/, fontEnv],
   ];
   let failed = false;
+  if (agentBrowser) {
+    console.log(`ok  agent-browser: ${agentBrowser.version} ${agentBrowser.platformKey} sha256 verified`);
+  } else {
+    failed = true;
+    console.log('missing  agent-browser: fixed native binary, policy, or browser executable verification failed');
+  }
+  for (const channel of missingBrowserChannels) {
+    failed = true;
+    console.log(`missing  Browser (${channel}): trusted executable not found`);
+  }
   if (imageMagick) console.log(`ok  ImageMagick: ${imageMagick.version}`);
   else {
     failed = true;
@@ -225,7 +249,10 @@ export async function main(argv) {
     const siteId = requireArg(args.shift(), 'login requires a site id');
     if (args.length) throw new Error(`unexpected argument: ${args[0]}`);
     const { site } = await loadSite(siteId);
-    if (action === 'open') await openLogin(site);
+    if (action === 'open') {
+      const output = await openLogin(site);
+      if (output) console.log(output);
+    }
     else if (action === 'save') await saveLogin(site);
     else if (action === 'close') await closeLogin(site);
     else throw new Error(`unknown login action: ${action}`);
@@ -238,7 +265,8 @@ export async function main(argv) {
     if (args[0]?.startsWith('--session=')) session = args.shift().slice('--session='.length);
     if (!/^[a-zA-Z0-9_-]+$/.test(session)) throw new Error('session must contain only letters, numbers, underscores, and hyphens');
     const { site } = await loadSite(siteId);
-    await runBrowserCommand(site, session, args);
+    const output = await runBrowserCommand(site, session, args);
+    if (output) console.log(output);
     return;
   }
 
@@ -255,8 +283,8 @@ export async function main(argv) {
     const siteId = requireArg(args.shift(), 'unlock requires a site id');
     if (args.length) throw new Error(`unexpected argument: ${args[0]}`);
     const { site } = await loadSite(siteId);
-    await unlockSite(site);
-    console.log(`${siteId}: lock removed`);
+    const archived = await unlockSite(site);
+    console.log(`${siteId}: verified inactive; archived ${archived} stale runtime record(s)`);
     return;
   }
 

@@ -1,0 +1,13 @@
+{
+  "version": "0.35.1",
+  "platforms": {
+    "linux-x64": {
+      "file": "agent-browser-linux-x64",
+      "sha256": "21874b7afbe12a225d01c7f3f7d635c2c2f740660f6ef5e7916737c60c4f1faf"
+    },
+    "linux-arm64": {
+      "file": "agent-browser-linux-arm64",
+      "sha256": "4c24f1fa2f704865a0c4d6f906bf8116931888681742bbf080c03dceb147ac9e"
+    }
+  }
+}
