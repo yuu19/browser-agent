@@ -20,14 +20,15 @@ function managedSocketPath(env) {
   );
 }
 
-test('agentBrowserSocketDirectory keeps the managed socket within the Linux pathname limit', () => {
+test('agentBrowserSocketDirectory keeps the managed socket within the agent-browser limit', () => {
   const env = {
     BROWSER_AGENT_DATA_DIR: '/tmp/browser-agent-data',
     XDG_RUNTIME_DIR: '/run/user/1000',
   };
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 'user';
 
-  assert.match(agentBrowserSocketDirectory(env), /^\/run\/user\/1000\/ba-[a-f0-9]{12}$/);
-  assert.ok(Buffer.byteLength(managedSocketPath(env)) <= 107);
+  assert.match(agentBrowserSocketDirectory(env), new RegExp(`^${tmpdir()}/ba-${uid}-[a-f0-9]{12}$`));
+  assert.ok(Buffer.byteLength(managedSocketPath(env)) <= 103);
 });
 
 test('agentBrowserSocketDirectory falls back when XDG_RUNTIME_DIR is too long', () => {
@@ -38,7 +39,7 @@ test('agentBrowserSocketDirectory falls back when XDG_RUNTIME_DIR is too long', 
   const uid = typeof process.getuid === 'function' ? process.getuid() : 'user';
 
   assert.match(agentBrowserSocketDirectory(env), new RegExp(`^${tmpdir()}/ba-${uid}-[a-f0-9]{12}$`));
-  assert.ok(Buffer.byteLength(managedSocketPath(env)) <= 107);
+  assert.ok(Buffer.byteLength(managedSocketPath(env)) <= 103);
 });
 
 test('agentBrowserSocketDirectory isolates different data roots', () => {
