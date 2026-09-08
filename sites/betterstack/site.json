@@ -1,7 +1,11 @@
 {
   "baseUrl": "https://betterstack.com/",
   "loginUrl": "https://betterstack.com/users/sign-in",
-  "allowedOrigins": ["https://betterstack.com"],
+  "allowedOrigins": [
+    "https://betterstack.com",
+    "https://uptime.betterstack.com",
+    "https://telemetry.betterstack.com"
+  ],
   "authMode": "profile",
   "browser": {
     "channel": "auto",
