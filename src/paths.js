@@ -6,6 +6,15 @@ import { fileURLToPath } from 'node:url';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+const linuxUnixSocketPathMaxBytes = 107;
+const managedSocketSuffixBytes = Buffer.byteLength(join(
+  'namespaces',
+  `ba-${'0'.repeat(16)}`,
+  'run',
+  `ba-${'0'.repeat(32)}.sock`,
+)) + 1;
+const agentBrowserSocketDirectoryMaxBytes = linuxUnixSocketPathMaxBytes - managedSocketSuffixBytes;
+
 export function dataRoot(env = process.env) {
   if (env.BROWSER_AGENT_DATA_DIR) return resolve(env.BROWSER_AGENT_DATA_DIR);
   const base = env.XDG_DATA_HOME ? resolve(env.XDG_DATA_HOME) : join(homedir(), '.local', 'share');
@@ -49,7 +58,23 @@ export function agentBrowserNamespace(env = process.env) {
 export function agentBrowserSocketDirectory(env = process.env) {
   const digest = createHash('sha256').update(dataRoot(env)).digest('hex').slice(0, 12);
   const uid = typeof process.getuid === 'function' ? process.getuid() : 'user';
-  return join(env.XDG_RUNTIME_DIR ? resolve(env.XDG_RUNTIME_DIR) : tmpdir(), `ba-${uid}-${digest}`);
+  const candidates = [];
+  if (env.XDG_RUNTIME_DIR) {
+    // XDG_RUNTIME_DIR is already private to the current user, so repeating the UID
+    // wastes bytes from Linux's fixed-size Unix-domain socket pathname.
+    candidates.push(join(resolve(env.XDG_RUNTIME_DIR), `ba-${digest}`));
+  }
+  candidates.push(join(tmpdir(), `ba-${uid}-${digest}`));
+
+  const socketDirectory = candidates.find(
+    (candidate) => Buffer.byteLength(candidate) <= agentBrowserSocketDirectoryMaxBytes,
+  );
+  if (!socketDirectory) {
+    throw new Error(
+      `agent-browser socket directory exceeds the ${agentBrowserSocketDirectoryMaxBytes}-byte managed limit`,
+    );
+  }
+  return socketDirectory;
 }
 
 export function safeOutputPath(cwd, output) {

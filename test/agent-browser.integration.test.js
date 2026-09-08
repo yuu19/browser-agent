@@ -13,7 +13,7 @@ import {
   saveLogin,
 } from '../src/agent-browser.js';
 import { verifyAgentBrowserBinary } from '../src/agent-browser-binary.js';
-import { siteRuntimePaths } from '../src/paths.js';
+import { agentBrowserNamespace, siteRuntimePaths } from '../src/paths.js';
 import { exists, readLock } from '../src/runtime.js';
 
 const integrationTest = process.env.BROWSER_AGENT_INTEGRATION === '1' ? test : test.skip;
@@ -77,7 +77,11 @@ integrationTest('agent-browser is contained by bootstrap, policy, locale, and al
   });
   const appAddress = await listen(app);
   const origin = `http://127.0.0.1:${appAddress.port}`;
-  const env = { ...process.env, BROWSER_AGENT_DATA_DIR: root, XDG_RUNTIME_DIR: tmpdir() };
+  const env = {
+    ...process.env,
+    BROWSER_AGENT_DATA_DIR: root,
+    XDG_RUNTIME_DIR: join(root, 'runtime-with-a-deliberately-long-user-specific-path'),
+  };
   const site = {
     id: 'example',
     baseUrl: `${origin}/`,
@@ -93,6 +97,14 @@ integrationTest('agent-browser is contained by bootstrap, policy, locale, and al
     },
   };
   const paths = siteRuntimePaths(site.id, env);
+  const socketPath = join(
+    paths.socketDirectory,
+    'namespaces',
+    agentBrowserNamespace(env),
+    'run',
+    `${managedSessionName(site.id, 'integration')}.sock`,
+  );
+  assert.ok(Buffer.byteLength(socketPath) <= 107);
   await mkdir(dirname(paths.authState), { recursive: true });
   await writeFile(paths.authState, '{"cookies":[],"origins":[]}\n', { mode: 0o600 });
 
