@@ -6,14 +6,16 @@ import { fileURLToPath } from 'node:url';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-const linuxUnixSocketPathMaxBytes = 107;
+// agent-browser 0.35.1 accepts managed Unix socket paths through 103 bytes;
+// 104 bytes and above fail during bootstrap even though Linux sun_path is larger.
+const agentBrowserUnixSocketPathMaxBytes = 103;
 const managedSocketSuffixBytes = Buffer.byteLength(join(
   'namespaces',
   `ba-${'0'.repeat(16)}`,
   'run',
   `ba-${'0'.repeat(32)}.sock`,
 )) + 1;
-const agentBrowserSocketDirectoryMaxBytes = linuxUnixSocketPathMaxBytes - managedSocketSuffixBytes;
+const agentBrowserSocketDirectoryMaxBytes = agentBrowserUnixSocketPathMaxBytes - managedSocketSuffixBytes;
 
 export function dataRoot(env = process.env) {
   if (env.BROWSER_AGENT_DATA_DIR) return resolve(env.BROWSER_AGENT_DATA_DIR);

@@ -104,7 +104,7 @@ integrationTest('agent-browser is contained by bootstrap, policy, locale, and al
     'run',
     `${managedSessionName(site.id, 'integration')}.sock`,
   );
-  assert.ok(Buffer.byteLength(socketPath) <= 107);
+  assert.ok(Buffer.byteLength(socketPath) <= 103);
   await mkdir(dirname(paths.authState), { recursive: true });
   await writeFile(paths.authState, '{"cookies":[],"origins":[]}\n', { mode: 0o600 });
 
